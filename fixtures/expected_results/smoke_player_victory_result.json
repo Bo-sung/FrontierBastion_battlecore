@@ -1,0 +1,7 @@
+{
+  "outcome": "victory",
+  "end_reason": "enemy_base_destroyed",
+  "clear_time_tick": 1,
+  "player_base_hp_ratio": "1.0000",
+  "enemy_base_hp_ratio": "0.0000"
+}

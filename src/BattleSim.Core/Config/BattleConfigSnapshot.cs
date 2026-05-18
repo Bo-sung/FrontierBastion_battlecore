@@ -34,6 +34,9 @@ namespace BattleSim.Core.Config
         // Lane definitions (required for combat validation).
         public LaneDefinition[] Lanes { get; private set; }
 
+        // Enemy spawn schedule; empty array means no scheduled enemy spawns.
+        public EnemySpawnDefinition[] EnemySpawnSchedule { get; private set; }
+
         public BattleConfigSnapshot(
             string configVersion,
             Fp initialEnergy,
@@ -45,16 +48,13 @@ namespace BattleSim.Core.Config
             Fp playerBaseInitialHp,
             Fp enemyBaseInitialHp,
             int maxBattleTick,
-            LaneDefinition[] lanes)
+            LaneDefinition[] lanes,
+            EnemySpawnDefinition[]? enemySpawnSchedule = null)
         {
             if (lanes == null || lanes.Length == 0)
-            {
                 throw new ArgumentException("lanes is required.", "lanes");
-            }
             if (maxBattleTick <= 0)
-            {
                 throw new ArgumentOutOfRangeException("maxBattleTick");
-            }
             ConfigVersion = configVersion;
             InitialEnergy = initialEnergy;
             MaxEnergy = maxEnergy;
@@ -66,6 +66,9 @@ namespace BattleSim.Core.Config
             EnemyBaseInitialHp = enemyBaseInitialHp;
             MaxBattleTick = maxBattleTick;
             Lanes = (LaneDefinition[])lanes.Clone();
+            EnemySpawnSchedule = enemySpawnSchedule != null
+                ? (EnemySpawnDefinition[])enemySpawnSchedule.Clone()
+                : new EnemySpawnDefinition[0];
         }
     }
 }

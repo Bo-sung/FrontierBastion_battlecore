@@ -1,0 +1,25 @@
+{
+  "stage_id": "smoke_victory",
+  "rng_seed": 1,
+  "slots": [
+    {
+      "slot_index": 0,
+      "pilot_id": "pilot_a",
+      "drone_squad_id": "drone_a",
+      "energy_cost": "20.0000",
+      "cooldown_tick": 5,
+      "drone": {
+        "hp": "100.0000",
+        "attack": "50.0000",
+        "range_milli": 500,
+        "speed_milli_per_tick": 2000
+      },
+      "pilot": {
+        "hp": "200.0000",
+        "attack": "20.0000",
+        "range_milli": 1000,
+        "speed_milli_per_tick": 300
+      }
+    }
+  ]
+}

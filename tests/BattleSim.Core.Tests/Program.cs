@@ -26,7 +26,7 @@ RngTests.Run();
 Console.WriteLine("RNG tests passed.");
 
 SimulatorTests.Run();
-Console.WriteLine("Simulator skeleton tests passed.");
+Console.WriteLine("Simulator + smoke tests passed.");
 
 Console.WriteLine("BattleSim.Core all checks passed.");
 

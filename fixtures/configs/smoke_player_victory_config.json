@@ -1,0 +1,26 @@
+{
+  "config_version": "smoke_v1",
+  "energy": {
+    "initial": "20.0000",
+    "max": "100.0000",
+    "regen_per_tick": "0.0000"
+  },
+  "pilot_timings": {
+    "deploy_cooldown_tick": 200,
+    "return_cooldown_tick": 100,
+    "knockout_drone_resume_tick": 50
+  },
+  "bases": {
+    "player_initial_hp": "1000.0000",
+    "enemy_initial_hp": "1.0000"
+  },
+  "max_battle_tick": 10,
+  "lanes": [
+    {
+      "lane_id": "lane_ground",
+      "lane_type": "Ground",
+      "lane_length_milli": 1000
+    }
+  ],
+  "enemy_spawn_schedule": []
+}
