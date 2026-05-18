@@ -5,6 +5,8 @@
     <AssemblyName>BattleSim.Core</AssemblyName>
     <RootNamespace>BattleSim.Core</RootNamespace>
     <Description>Shared deterministic battle simulation core for Frontier Bastion.</Description>
+    <!-- C# 8: no record, no init. Hold until Unity version confirmed. -->
+    <LangVersion>8.0</LangVersion>
   </PropertyGroup>
 
 </Project>
