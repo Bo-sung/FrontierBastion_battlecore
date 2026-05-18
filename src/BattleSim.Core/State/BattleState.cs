@@ -74,12 +74,12 @@ namespace BattleSim.Core.State
     public sealed class BattleEntity
     {
         public string EntityId { get; private set; }
-        public string OwnerSide { get; private set; } // "player" | "enemy"
+        public OwnerSide OwnerSide { get; private set; }
         public Fp Hp { get; private set; }
         /// <summary>Position in milliunits (see <see cref="Milliunits"/>).</summary>
         public long PositionMilli { get; private set; }
 
-        public BattleEntity(string entityId, string ownerSide, Fp hp, long positionMilli)
+        public BattleEntity(string entityId, OwnerSide ownerSide, Fp hp, long positionMilli)
         {
             EntityId = entityId;
             OwnerSide = ownerSide;

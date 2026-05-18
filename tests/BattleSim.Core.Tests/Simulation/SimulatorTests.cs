@@ -22,13 +22,9 @@ namespace BattleSim.Core.Tests.Simulation
 
         private static BattleConfigSnapshot MinimalConfig()
         {
-            SlotDefinition[] slots = new SlotDefinition[]
-            {
-                new SlotDefinition(0, "pilot_a", "drone_a", Fp.FromInt(10), 100),
-            };
             LaneDefinition[] lanes = new LaneDefinition[]
             {
-                new LaneDefinition("lane_ground", "ground"),
+                new LaneDefinition("lane_ground", LaneType.Ground),
             };
             return new BattleConfigSnapshot(
                 configVersion: "test",
@@ -41,13 +37,21 @@ namespace BattleSim.Core.Tests.Simulation
                 playerBaseInitialHp: Fp.FromInt(1000),
                 enemyBaseInitialHp: Fp.FromInt(1000),
                 maxBattleTick: 3600,
-                slots: slots,
                 lanes: lanes);
+        }
+
+        private static BattleInitialState MinimalInitialState()
+        {
+            SlotDefinition[] slots = new SlotDefinition[]
+            {
+                new SlotDefinition(0, "pilot_a", "drone_a", Fp.FromInt(10), 100),
+            };
+            return new BattleInitialState("stage_1", 42L, slots);
         }
 
         private static void ConstructsAndExposesInitialState()
         {
-            BattleSimulator sim = new BattleSimulator(MinimalConfig(), new BattleInitialState("stage_1", 42L));
+            BattleSimulator sim = new BattleSimulator(MinimalConfig(), MinimalInitialState());
             BattleState s = sim.GetState();
             if (s.CurrentTick != 0) throw new InvalidOperationException("CurrentTick != 0");
             if (s.PlayerBaseHp != Fp.FromInt(1000)) throw new InvalidOperationException("PlayerBaseHp init");
@@ -58,7 +62,11 @@ namespace BattleSim.Core.Tests.Simulation
 
         private static void AdvanceTickThrowsNotImplemented()
         {
-            BattleSimulator sim = new BattleSimulator(MinimalConfig(), new BattleInitialState("stage_1", 1L));
+            BattleSimulator sim = new BattleSimulator(MinimalConfig(),
+                new BattleInitialState("stage_1", 1L, new SlotDefinition[]
+                {
+                    new SlotDefinition(0, "pilot_a", "drone_a", Fp.FromInt(10), 100),
+                }));
             bool threw = false;
             try { sim.AdvanceTick(); }
             catch (NotImplementedException) { threw = true; }
@@ -67,7 +75,11 @@ namespace BattleSim.Core.Tests.Simulation
 
         private static void GetResultBeforeTerminationThrows()
         {
-            BattleSimulator sim = new BattleSimulator(MinimalConfig(), new BattleInitialState("stage_1", 1L));
+            BattleSimulator sim = new BattleSimulator(MinimalConfig(),
+                new BattleInitialState("stage_1", 1L, new SlotDefinition[]
+                {
+                    new SlotDefinition(0, "pilot_a", "drone_a", Fp.FromInt(10), 100),
+                }));
             bool threw = false;
             try { sim.GetResult(); }
             catch (InvalidOperationException) { threw = true; }
@@ -79,7 +91,9 @@ namespace BattleSim.Core.Tests.Simulation
             bool threw;
 
             threw = false;
+#pragma warning disable CS8625 // intentional: verifying runtime null guard rejects null
             try { BattleCommand.SpawnDroneSquad(0, 0, null); }
+#pragma warning restore CS8625
             catch (ArgumentException) { threw = true; }
             if (!threw) throw new InvalidOperationException("SpawnDroneSquad must require laneId.");
 
@@ -88,8 +102,10 @@ namespace BattleSim.Core.Tests.Simulation
             catch (ArgumentException) { threw = true; }
             if (!threw) throw new InvalidOperationException("DeployPilot must require laneId.");
 
-            // RecallPilot: lane policy unresolved — null must NOT throw here.
+            // RecallPilot: lane policy unresolved — null must NOT throw here (PD-A).
+#pragma warning disable CS8625 // intentional: PendingDecision — laneId may remain nullable for RecallPilot
             BattleCommand recall = BattleCommand.RecallPilot(0, 0, null);
+#pragma warning restore CS8625
             if (recall.CommandType != BattleCommandType.RecallPilot)
             {
                 throw new InvalidOperationException("RecallPilot command type mismatch.");

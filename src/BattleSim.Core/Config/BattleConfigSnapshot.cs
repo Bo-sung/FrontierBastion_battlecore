@@ -4,9 +4,11 @@ using BattleSim.Core.FixedPoint;
 namespace BattleSim.Core.Config
 {
     /// <summary>
-    /// Frozen tunable parameters for a single battle.
+    /// Frozen stage-level tunable parameters for a single battle.
     /// Immutable once handed to <see cref="Simulation.BattleSimulator"/>.
-    /// No HTTP, DB, reward, or server-validation fields here.
+    /// No HTTP, DB, reward, server-validation, or player-deck fields here.
+    /// Player deck (slot/pilot/drone selection) lives in
+    /// <see cref="BattleSim.Core.State.BattleInitialState"/>.
     /// </summary>
     public sealed class BattleConfigSnapshot
     {
@@ -29,9 +31,6 @@ namespace BattleSim.Core.Config
         // Hard upper bound for battle length, in ticks.
         public int MaxBattleTick { get; private set; }
 
-        // Per-slot definitions.
-        public SlotDefinition[] Slots { get; private set; }
-
         // Lane definitions (required for combat validation).
         public LaneDefinition[] Lanes { get; private set; }
 
@@ -46,13 +45,8 @@ namespace BattleSim.Core.Config
             Fp playerBaseInitialHp,
             Fp enemyBaseInitialHp,
             int maxBattleTick,
-            SlotDefinition[] slots,
             LaneDefinition[] lanes)
         {
-            if (slots == null || slots.Length == 0)
-            {
-                throw new ArgumentException("slots is required.", "slots");
-            }
             if (lanes == null || lanes.Length == 0)
             {
                 throw new ArgumentException("lanes is required.", "lanes");
@@ -71,8 +65,7 @@ namespace BattleSim.Core.Config
             PlayerBaseInitialHp = playerBaseInitialHp;
             EnemyBaseInitialHp = enemyBaseInitialHp;
             MaxBattleTick = maxBattleTick;
-            Slots = slots;
-            Lanes = lanes;
+            Lanes = (LaneDefinition[])lanes.Clone();
         }
     }
 }

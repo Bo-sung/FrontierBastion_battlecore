@@ -164,13 +164,12 @@ namespace BattleSim.Core.FixedPoint
         public override string ToString()
         {
             // Render with up to 4 fractional digits (Scale = 10000).
-            long whole = _raw / Scale;
-            long frac = _raw % Scale;
-            if (frac < 0)
-            {
-                frac = -frac;
-            }
-            return string.Format(CultureInfo.InvariantCulture, "{0}.{1:D4}", whole, frac);
+            // Work from absolute raw to correctly handle -0.xxxx (whole == 0, raw < 0).
+            long absRaw = _raw < 0 ? -_raw : _raw;
+            long whole = absRaw / Scale;
+            long frac = absRaw % Scale;
+            string sign = _raw < 0 ? "-" : "";
+            return string.Format(CultureInfo.InvariantCulture, "{0}{1}.{2:D4}", sign, whole, frac);
         }
     }
 }

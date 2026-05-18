@@ -9,9 +9,9 @@ namespace BattleSim.Core.Config
     public sealed class LaneDefinition
     {
         public string LaneId { get; private set; }
-        public string LaneType { get; private set; } // e.g. "ground", "air"
+        public LaneType LaneType { get; private set; }
 
-        public LaneDefinition(string laneId, string laneType)
+        public LaneDefinition(string laneId, LaneType laneType)
         {
             if (string.IsNullOrEmpty(laneId))
             {

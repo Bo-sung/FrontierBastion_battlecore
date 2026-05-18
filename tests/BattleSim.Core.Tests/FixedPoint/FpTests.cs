@@ -16,6 +16,7 @@ namespace BattleSim.Core.Tests.FixedPoint
             Negation();
             DivideByZeroThrows();
             RawRoundTrip();
+            ToStringNegativeFractional();
         }
 
         private static void ConstantsRoundTrip()
@@ -90,6 +91,17 @@ namespace BattleSim.Core.Tests.FixedPoint
         {
             long raw = 1234567L;
             AssertEqual(raw, Fp.FromRaw(raw).Raw, "Raw round-trip");
+        }
+
+        private static void ToStringNegativeFractional()
+        {
+            // Negative fractional (whole == 0, raw < 0) must show the minus sign.
+            AssertEqual("-0.5000", Fp.FromRaw(-5000).ToString(), "Fp.FromRaw(-5000).ToString()");
+            // Negative whole+fractional.
+            AssertEqual("-1.5000", Fp.FromRaw(-15000).ToString(), "Fp.FromRaw(-15000).ToString()");
+            // Positive is unaffected.
+            AssertEqual("0.5000", Fp.FromRaw(5000).ToString(), "Fp.FromRaw(5000).ToString()");
+            AssertEqual("1.0000", Fp.One.ToString(), "Fp.One.ToString()");
         }
 
         private static void AssertEqual<T>(T expected, T actual, string name)
