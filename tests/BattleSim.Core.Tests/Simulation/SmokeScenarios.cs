@@ -9,47 +9,59 @@ namespace BattleSim.Core.Tests.Simulation
 {
     /// <summary>
     /// Three canonical smoke scenarios for client integration testing.
-    /// All values are tuned to terminate in the minimum number of ticks
-    /// so the Unity integration loop can be validated quickly.
+    /// All values are tuned to terminate in the minimum number of ticks.
     ///
     /// Scenario summary:
-    ///   PlayerVictory  — player SpawnDroneSquad → enemy base destroyed at tick 1.
-    ///   PlayerDefeat   — enemy schedule only   → player base destroyed at tick 1.
-    ///   TimeoutDefeat  — no commands, 3 ticks  → tie → Defeat (TimeOut).
+    ///   SideAVictory          — SideA SpawnDroneSquad → SideB base destroyed at tick 1.
+    ///   SideBVictory          — SideB SpawnDroneSquad → SideA base destroyed at tick 1.
+    ///   TimeoutSideBTiebreak  — no commands, 3 ticks → tie → SideB wins (TimeOutTieWinnerSide=SideB).
+    ///
+    /// PvE interpretation: SideA = local player, SideB = AI controller.
     /// </summary>
     internal static class SmokeScenarios
     {
         // ------------------------------------------------------------------ scenario builders
 
         /// <summary>
-        /// Player spawns one drone that crosses the short lane and destroys the enemy
+        /// SideA spawns one drone that crosses the short lane and destroys the SideB
         /// base (HP = 1) in a single tick.
-        /// Commands: SpawnDroneSquad at tick 0, slot 0, lane "lane_ground".
-        /// Expected: Victory / EnemyBaseDestroyed / ClearTimeTick = 1.
+        /// Commands: SpawnDroneSquad at tick 0, slot 0, lane "lane_ground", side SideA.
+        /// Expected: WinnerSide=SideA / SideBBaseDestroyed / ClearTimeTick=1.
         /// </summary>
         public static (BattleConfigSnapshot Config, BattleInitialState Initial, BattleCommand[] Commands)
-            PlayerVictory()
+            SideAVictory()
         {
             LaneDefinition[] lanes = new LaneDefinition[]
             {
                 new LaneDefinition("lane_ground", LaneType.Ground, 1_000L),
             };
-            BattleConfigSnapshot cfg = new BattleConfigSnapshot(
-                configVersion: "smoke_v1",
-                initialEnergy: Fp.FromInt(20),    // covers drone cost
-                maxEnergy: Fp.FromInt(100),
-                energyRegenPerTick: Fp.Zero,
-                pilotDeployCooldownTick: 200,
-                pilotReturnCooldownTick: 100,
-                pilotKnockoutDroneResumeTick: 50,
-                playerBaseInitialHp: Fp.FromInt(1000),
-                enemyBaseInitialHp: Fp.FromInt(1),  // destroyed by one drone attack
-                maxBattleTick: 10,
-                lanes: lanes);
+            BattleSideConfig cfgA = new BattleSideConfig(
+                BattleSide.SideA,
+                baseInitialHp:      Fp.FromInt(1000),
+                initialEnergy:      Fp.FromInt(20),
+                maxEnergy:          Fp.FromInt(100),
+                energyRegenPerTick: Fp.Zero);
+            BattleSideConfig cfgB = new BattleSideConfig(
+                BattleSide.SideB,
+                baseInitialHp:      Fp.FromInt(1),   // destroyed by one drone attack
+                initialEnergy:      Fp.Zero,
+                maxEnergy:          Fp.FromInt(100),
+                energyRegenPerTick: Fp.Zero);
 
-            // Drone: speed 2000 > lane 1000 → reaches enemy base in 1 tick.
-            // Attack 50 > enemyBaseHp 1 → destroys in 1 hit.
-            SlotDefinition[] slots = new SlotDefinition[]
+            BattleConfigSnapshot cfg = new BattleConfigSnapshot(
+                configVersion:              "smoke_v2",
+                sideA:                      cfgA,
+                sideB:                      cfgB,
+                pilotDeployCooldownTick:    200,
+                pilotReturnCooldownTick:    100,
+                pilotKnockoutDroneResumeTick: 50,
+                maxBattleTick:              10,
+                lanes:                      lanes,
+                timeOutTieWinnerSide:       BattleSide.SideB);
+
+            // Drone: speed 2000 > lane 1000 → reaches SideB base in 1 tick.
+            // Attack 50 > sideBBaseHp 1 → destroys in 1 hit.
+            SlotDefinition[] slotsA = new SlotDefinition[]
             {
                 new SlotDefinition(
                     slotIndex: 0, pilotId: "pilot_a", droneSquadId: "drone_a",
@@ -59,52 +71,66 @@ namespace BattleSim.Core.Tests.Simulation
                     pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
                     pilotRangeMilli: 1_000L, pilotSpeedMilliPerTick: 300L),
             };
-            BattleInitialState initial = new BattleInitialState("smoke_victory", 1L, slots);
+            SlotDefinition[] slotsB = new SlotDefinition[]
+            {
+                new SlotDefinition(
+                    slotIndex: 0, pilotId: "pilot_b", droneSquadId: "drone_b",
+                    energyCost: Fp.FromInt(20), cooldownTick: 5,
+                    droneHp: Fp.FromInt(100), droneAttack: Fp.FromInt(10),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 500L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_000L, pilotSpeedMilliPerTick: 300L),
+            };
+            BattleInitialState initial = new BattleInitialState(
+                "smoke_side_a_victory", 1L,
+                new BattleSideInitialState(BattleSide.SideA, slotsA),
+                new BattleSideInitialState(BattleSide.SideB, slotsB));
 
             BattleCommand[] commands = new BattleCommand[]
             {
-                BattleCommand.SpawnDroneSquad(tick: 0, slotIndex: 0, laneId: "lane_ground"),
+                BattleCommand.SpawnDroneSquad(tick: 0, slotIndex: 0, laneId: "lane_ground", side: BattleSide.SideA),
             };
 
             return (cfg, initial, commands);
         }
 
         /// <summary>
-        /// Enemy schedule spawns one fast enemy that crosses the short lane and
-        /// destroys the player base (HP = 1) at tick 1. No player commands.
-        /// Expected: Defeat / PlayerBaseDestroyed / ClearTimeTick = 1.
+        /// SideB spawns one fast drone that crosses the short lane and destroys the SideA
+        /// base (HP = 1) at tick 1. No SideA commands.
+        /// Expected: WinnerSide=SideB / SideABaseDestroyed / ClearTimeTick=1.
         /// </summary>
         public static (BattleConfigSnapshot Config, BattleInitialState Initial, BattleCommand[] Commands)
-            PlayerDefeat()
+            SideBVictory()
         {
             LaneDefinition[] lanes = new LaneDefinition[]
             {
                 new LaneDefinition("lane_ground", LaneType.Ground, 1_000L),
             };
-            // Enemy speed 2000 > lane 1000 → reaches player base in same tick it spawns.
-            // Attack 50 > playerBaseHp 1 → destroys in 1 hit.
-            EnemySpawnDefinition[] spawns = new EnemySpawnDefinition[]
-            {
-                new EnemySpawnDefinition(
-                    spawnTick: 1, laneId: "lane_ground",
-                    hp: Fp.FromInt(200), attack: Fp.FromInt(50),
-                    rangeMilli: 500L, speedMilliPerTick: 2_000L),
-            };
-            BattleConfigSnapshot cfg = new BattleConfigSnapshot(
-                configVersion: "smoke_v1",
-                initialEnergy: Fp.FromInt(0),
-                maxEnergy: Fp.FromInt(100),
-                energyRegenPerTick: Fp.Zero,
-                pilotDeployCooldownTick: 200,
-                pilotReturnCooldownTick: 100,
-                pilotKnockoutDroneResumeTick: 50,
-                playerBaseInitialHp: Fp.FromInt(1),   // destroyed by one enemy attack
-                enemyBaseInitialHp: Fp.FromInt(1000),
-                maxBattleTick: 10,
-                lanes: lanes,
-                enemySpawnSchedule: spawns);
+            BattleSideConfig cfgA = new BattleSideConfig(
+                BattleSide.SideA,
+                baseInitialHp:      Fp.FromInt(1),   // destroyed by one drone attack
+                initialEnergy:      Fp.Zero,
+                maxEnergy:          Fp.FromInt(100),
+                energyRegenPerTick: Fp.Zero);
+            BattleSideConfig cfgB = new BattleSideConfig(
+                BattleSide.SideB,
+                baseInitialHp:      Fp.FromInt(1000),
+                initialEnergy:      Fp.FromInt(20),  // covers drone cost
+                maxEnergy:          Fp.FromInt(100),
+                energyRegenPerTick: Fp.Zero);
 
-            SlotDefinition[] slots = new SlotDefinition[]
+            BattleConfigSnapshot cfg = new BattleConfigSnapshot(
+                configVersion:              "smoke_v2",
+                sideA:                      cfgA,
+                sideB:                      cfgB,
+                pilotDeployCooldownTick:    200,
+                pilotReturnCooldownTick:    100,
+                pilotKnockoutDroneResumeTick: 50,
+                maxBattleTick:              10,
+                lanes:                      lanes,
+                timeOutTieWinnerSide:       BattleSide.SideB);
+
+            SlotDefinition[] slotsA = new SlotDefinition[]
             {
                 new SlotDefinition(
                     slotIndex: 0, pilotId: "pilot_a", droneSquadId: "drone_a",
@@ -114,35 +140,65 @@ namespace BattleSim.Core.Tests.Simulation
                     pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
                     pilotRangeMilli: 1_000L, pilotSpeedMilliPerTick: 300L),
             };
-            BattleInitialState initial = new BattleInitialState("smoke_defeat", 2L, slots);
+            // SideB drone: speed 2000 > lane 1000 → reaches SideA base in 1 tick. Attack 50 > hp 1.
+            SlotDefinition[] slotsB = new SlotDefinition[]
+            {
+                new SlotDefinition(
+                    slotIndex: 0, pilotId: "pilot_b", droneSquadId: "drone_b",
+                    energyCost: Fp.FromInt(20), cooldownTick: 5,
+                    droneHp: Fp.FromInt(100), droneAttack: Fp.FromInt(50),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 2_000L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_000L, pilotSpeedMilliPerTick: 300L),
+            };
+            BattleInitialState initial = new BattleInitialState(
+                "smoke_side_b_victory", 2L,
+                new BattleSideInitialState(BattleSide.SideA, slotsA),
+                new BattleSideInitialState(BattleSide.SideB, slotsB));
 
-            return (cfg, initial, new BattleCommand[0]);
+            BattleCommand[] commands = new BattleCommand[]
+            {
+                BattleCommand.SpawnDroneSquad(tick: 0, slotIndex: 0, laneId: "lane_ground", side: BattleSide.SideB),
+            };
+
+            return (cfg, initial, commands);
         }
 
         /// <summary>
-        /// No commands, no enemy spawns. Battle times out after 3 ticks.
-        /// Both bases untouched (ratio 1.0 each) → tie → Defeat.
-        /// Expected: Defeat / TimeOut / ClearTimeTick = 3.
+        /// No commands from either side. Battle times out after 3 ticks.
+        /// Both bases untouched (ratio 1.0 each) → tie → TimeOutTieWinnerSide=SideB wins.
+        /// Expected: WinnerSide=SideB / TimeOut / ClearTimeTick=3.
         /// </summary>
         public static (BattleConfigSnapshot Config, BattleInitialState Initial, BattleCommand[] Commands)
-            TimeoutDefeat()
+            TimeoutSideBTiebreak()
         {
             LaneDefinition[] lanes = new LaneDefinition[]
             {
                 new LaneDefinition("lane_ground", LaneType.Ground, 100_000L),
             };
+            BattleSideConfig cfgA = new BattleSideConfig(
+                BattleSide.SideA,
+                baseInitialHp:      Fp.FromInt(1000),
+                initialEnergy:      Fp.Zero,
+                maxEnergy:          Fp.FromInt(100),
+                energyRegenPerTick: Fp.Zero);
+            BattleSideConfig cfgB = new BattleSideConfig(
+                BattleSide.SideB,
+                baseInitialHp:      Fp.FromInt(1000),
+                initialEnergy:      Fp.Zero,
+                maxEnergy:          Fp.FromInt(100),
+                energyRegenPerTick: Fp.Zero);
+
             BattleConfigSnapshot cfg = new BattleConfigSnapshot(
-                configVersion: "smoke_v1",
-                initialEnergy: Fp.FromInt(0),
-                maxEnergy: Fp.FromInt(100),
-                energyRegenPerTick: Fp.Zero,
-                pilotDeployCooldownTick: 200,
-                pilotReturnCooldownTick: 100,
+                configVersion:              "smoke_v2",
+                sideA:                      cfgA,
+                sideB:                      cfgB,
+                pilotDeployCooldownTick:    200,
+                pilotReturnCooldownTick:    100,
                 pilotKnockoutDroneResumeTick: 50,
-                playerBaseInitialHp: Fp.FromInt(1000),
-                enemyBaseInitialHp: Fp.FromInt(1000),
-                maxBattleTick: 3,
-                lanes: lanes);
+                maxBattleTick:              3,
+                lanes:                      lanes,
+                timeOutTieWinnerSide:       BattleSide.SideB);
 
             SlotDefinition[] slots = new SlotDefinition[]
             {
@@ -154,7 +210,10 @@ namespace BattleSim.Core.Tests.Simulation
                     pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
                     pilotRangeMilli: 1_000L, pilotSpeedMilliPerTick: 300L),
             };
-            BattleInitialState initial = new BattleInitialState("smoke_timeout", 3L, slots);
+            BattleInitialState initial = new BattleInitialState(
+                "smoke_timeout_side_b_tiebreak", 3L,
+                new BattleSideInitialState(BattleSide.SideA, slots),
+                new BattleSideInitialState(BattleSide.SideB, (SlotDefinition[])slots.Clone()));
 
             return (cfg, initial, new BattleCommand[0]);
         }
@@ -165,6 +224,7 @@ namespace BattleSim.Core.Tests.Simulation
         /// Runs a complete battle and returns the result.
         /// Commands are dispatched by matching their Tick to sim.CurrentTick;
         /// commands must be ordered by tick ascending.
+        /// Both SideA and SideB commands at the same tick are all submitted before AdvanceTick.
         /// </summary>
         public static BattleResult RunToCompletion(
             BattleConfigSnapshot cfg,

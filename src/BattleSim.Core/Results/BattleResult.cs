@@ -1,14 +1,14 @@
 using System;
 using BattleSim.Core.FixedPoint;
+using BattleSim.Core.State;
 
 namespace BattleSim.Core.Results
 {
     /// <summary>
     /// Final, deterministic result of a battle.
     /// <para>
-    /// <see cref="Outcome"/> and <see cref="EndReason"/> are intentionally
-    /// separate: a TimeOut still resolves to Victory or Defeat by comparing
-    /// remaining base-HP ratios; ties resolve to Defeat.
+    /// <see cref="WinnerSide"/> is the primary result. Callers interpret victory/defeat
+    /// by comparing <see cref="WinnerSide"/> to their local side.
     /// </para>
     /// <para>
     /// Stars, reward grants, ranking points, and replay envelopes are
@@ -17,40 +17,46 @@ namespace BattleSim.Core.Results
     /// </summary>
     public sealed class BattleResult
     {
-        public BattleOutcome Outcome { get; private set; }
+        public BattleSide WinnerSide { get; private set; }
         public BattleEndReason EndReason { get; private set; }
         public int ClearTimeTick { get; private set; }
-        public Fp PlayerBaseHpRatio { get; private set; }
-        public Fp EnemyBaseHpRatio { get; private set; }
+        public Fp SideABaseHpRatio { get; private set; }
+        public Fp SideBBaseHpRatio { get; private set; }
 
         public BattleResult(
-            BattleOutcome outcome,
+            BattleSide winnerSide,
             BattleEndReason endReason,
             int clearTimeTick,
-            Fp playerBaseHpRatio,
-            Fp enemyBaseHpRatio)
+            Fp sideABaseHpRatio,
+            Fp sideBBaseHpRatio)
         {
             if (clearTimeTick < 0)
-            {
                 throw new ArgumentOutOfRangeException("clearTimeTick");
-            }
-            Outcome = outcome;
+            WinnerSide = winnerSide;
             EndReason = endReason;
             ClearTimeTick = clearTimeTick;
-            PlayerBaseHpRatio = playerBaseHpRatio;
-            EnemyBaseHpRatio = enemyBaseHpRatio;
+            SideABaseHpRatio = sideABaseHpRatio;
+            SideBBaseHpRatio = sideBBaseHpRatio;
         }
 
         /// <summary>
-        /// Build a result for a TimeOut termination. Outcome is decided by
-        /// remaining base-HP ratios; ties resolve to <see cref="BattleOutcome.Defeat"/>.
+        /// Build a result for a TimeOut termination. Winner is decided by remaining
+        /// base-HP ratios; ties resolve to <paramref name="tieWinnerSide"/>.
         /// </summary>
-        public static BattleResult FromTimeOut(int clearTimeTick, Fp playerHpRatio, Fp enemyHpRatio)
+        public static BattleResult FromTimeOut(
+            int clearTimeTick,
+            Fp sideAHpRatio,
+            Fp sideBHpRatio,
+            BattleSide tieWinnerSide)
         {
-            BattleOutcome outcome = playerHpRatio > enemyHpRatio
-                ? BattleOutcome.Victory
-                : BattleOutcome.Defeat;
-            return new BattleResult(outcome, BattleEndReason.TimeOut, clearTimeTick, playerHpRatio, enemyHpRatio);
+            BattleSide winner;
+            if (sideAHpRatio > sideBHpRatio)
+                winner = BattleSide.SideA;
+            else if (sideBHpRatio > sideAHpRatio)
+                winner = BattleSide.SideB;
+            else
+                winner = tieWinnerSide;
+            return new BattleResult(winner, BattleEndReason.TimeOut, clearTimeTick, sideAHpRatio, sideBHpRatio);
         }
     }
 }

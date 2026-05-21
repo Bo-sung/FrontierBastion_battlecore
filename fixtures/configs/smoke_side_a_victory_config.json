@@ -1,0 +1,29 @@
+{
+  "config_version": "smoke_v2",
+  "side_a": {
+    "base_initial_hp": "1000.0000",
+    "initial_energy": "20.0000",
+    "max_energy": "100.0000",
+    "energy_regen_per_tick": "0.0000"
+  },
+  "side_b": {
+    "base_initial_hp": "1.0000",
+    "initial_energy": "0.0000",
+    "max_energy": "100.0000",
+    "energy_regen_per_tick": "0.0000"
+  },
+  "pilot_timings": {
+    "deploy_cooldown_tick": 200,
+    "return_cooldown_tick": 100,
+    "knockout_drone_resume_tick": 50
+  },
+  "max_battle_tick": 10,
+  "timeout_tie_winner_side": "side_b",
+  "lanes": [
+    {
+      "lane_id": "lane_ground",
+      "lane_type": "Ground",
+      "lane_length_milli": 1000
+    }
+  ]
+}

@@ -14,13 +14,13 @@ namespace BattleSim.Core.Tests.Simulation
     {
         public static void Run()
         {
-            // ---- original skeleton tests (still valid) ----
+            // ---- skeleton tests ----
             ConstructsAndExposesInitialState();
             GetResultBeforeTerminationThrows();
             CommandFactoriesEnforceLaneRequirements();
             BattleResultFromTimeOutResolvesByRatio();
 
-            // ---- v0.1 implementation tests ----
+            // ---- v0.1 tests ----
             AdvanceTick_IncrementsTick();
             Energy_RegeneratesAndClampsAtMax();
             SlotDroneCooldown_DecreasesEachTick();
@@ -34,28 +34,32 @@ namespace BattleSim.Core.Tests.Simulation
             RecallPilot_ClearsPilotAndStartsCooldown();
             RecallPilot_RejectsWhenNotDeployed();
             MaxBattleTick_TerminatesBattle();
-            TimeoutTie_ProducesDefeat();
+            TimeoutTie_TieWinnerSideWins();
 
             // ---- smoke scenario tests ----
-            Smoke_PlayerVictory_ProducesExpectedResult();
-            Smoke_PlayerDefeat_ProducesExpectedResult();
-            Smoke_TimeoutDefeat_ProducesExpectedResult();
-            Smoke_PlayerVictory_IsDeterministicAcrossRepeatedRuns();
+            Smoke_SideAVictory_ProducesExpectedResult();
+            Smoke_SideBVictory_ProducesExpectedResult();
+            Smoke_TimeoutSideBTiebreak_ProducesExpectedResult();
+            Smoke_SideAVictory_IsDeterministicAcrossRepeatedRuns();
 
-            // ---- v0.2 implementation tests ----
+            // ---- v0.2 tests ----
             SpawnDroneSquad_CreatesEntityInLane();
             DeployPilot_CreatesEntityInLane();
             RecallPilot_RemovesEntityFromLane();
-            EnemySpawnSchedule_CreatesEnemyAtConfiguredTick();
-            PlayerEntity_MovesTowardEnemyBase();
-            EnemyEntity_MovesTowardPlayerBase();
+            SideBCommand_CreatesEntityAtFarEnd();
+            SideAEntity_MovesTowardSideBBase();
+            SideBEntity_MovesTowardSideABase();
+            SideAAndSideB_CanSubmitCommandsAtSameTick();
             Entity_NeverChangesLane();
-            Entity_AttacksNearestEnemyInSameLane();
+            Entity_AttacksNearestOpponentInSameLane();
+            Entity_OnlyAttacksOppositeOwner();
             DeadEntity_IsRemoved();
-            PlayerEntity_DamagesEnemyBase();
-            EnemyEntity_DamagesPlayerBase();
-            EnemyBaseDestroyed_ProducesVictory();
-            PlayerBaseDestroyed_ProducesDefeat();
+            SideAEntity_DamagesSideBBase();
+            SideBEntity_DamagesSideABase();
+            SideBBaseDestroyed_SideAWins();
+            SideABaseDestroyed_SideBWins();
+            Timeout_SideAWinsByHpRatio();
+            Timeout_SideBWinsByHpRatio();
             MaxBattleTick_TimeoutStillWorks();
             Determinism_SameSetupProducesSameResult();
         }
@@ -64,54 +68,82 @@ namespace BattleSim.Core.Tests.Simulation
 
         private static readonly long DefaultLaneLen = 100_000L;
 
+        private static BattleSideConfig SideACfg(
+            Fp initialEnergy, Fp maxEnergy, Fp energyRegen,
+            Fp? baseHp = null)
+        {
+            return new BattleSideConfig(
+                BattleSide.SideA, baseHp ?? Fp.FromInt(1000),
+                initialEnergy, maxEnergy, energyRegen);
+        }
+
+        private static BattleSideConfig SideBCfg(
+            Fp? initialEnergy = null, Fp? maxEnergy = null, Fp? energyRegen = null,
+            Fp? baseHp = null)
+        {
+            return new BattleSideConfig(
+                BattleSide.SideB, baseHp ?? Fp.FromInt(1000),
+                initialEnergy ?? Fp.Zero,
+                maxEnergy ?? Fp.FromInt(100),
+                energyRegen ?? Fp.Zero);
+        }
+
         /// <summary>
-        /// One ground lane, energy 0→100 at 0.25/tick, maxBattleTick 3600.
+        /// One ground lane, SideA energy 0→100 at 0.25/tick, maxBattleTick 3600.
         /// </summary>
         private static BattleConfigSnapshot MinimalConfig()
         {
             return MakeConfig(
-                initialEnergy: Fp.FromInt(0),
-                maxEnergy: Fp.FromInt(100),
-                energyRegenPerTick: Fp.FromFraction(1, 4));
+                sideAInitialEnergy:    Fp.FromInt(0),
+                sideAMaxEnergy:        Fp.FromInt(100),
+                sideAEnergyRegenPerTick: Fp.FromFraction(1, 4));
         }
 
         private static BattleConfigSnapshot MakeConfig(
-            Fp initialEnergy,
-            Fp maxEnergy,
-            Fp energyRegenPerTick,
+            Fp sideAInitialEnergy,
+            Fp sideAMaxEnergy,
+            Fp sideAEnergyRegenPerTick,
             int maxBattleTick = 3600,
-            long laneLengthMilli = 0,        // 0 → use DefaultLaneLen
-            EnemySpawnDefinition[]? enemySpawns = null,
-            Fp? playerBaseHp = null,
-            Fp? enemyBaseHp = null)
+            long laneLengthMilli = 0,
+            Fp? sideABaseHp = null,
+            Fp? sideBBaseHp = null,
+            Fp? sideBInitialEnergy = null,
+            Fp? sideBMaxEnergy = null,
+            Fp? sideBEnergyRegen = null,
+            BattleSide timeOutTieWinnerSide = BattleSide.SideB)
         {
             long laneLen = laneLengthMilli > 0 ? laneLengthMilli : DefaultLaneLen;
             LaneDefinition[] lanes = new LaneDefinition[]
             {
                 new LaneDefinition("lane_ground", LaneType.Ground, laneLen),
             };
+            BattleSideConfig cfgA = new BattleSideConfig(
+                BattleSide.SideA, sideABaseHp ?? Fp.FromInt(1000),
+                sideAInitialEnergy, sideAMaxEnergy, sideAEnergyRegenPerTick);
+            BattleSideConfig cfgB = new BattleSideConfig(
+                BattleSide.SideB, sideBBaseHp ?? Fp.FromInt(1000),
+                sideBInitialEnergy ?? Fp.Zero,
+                sideBMaxEnergy ?? Fp.FromInt(100),
+                sideBEnergyRegen ?? Fp.Zero);
             return new BattleConfigSnapshot(
-                configVersion: "test",
-                initialEnergy: initialEnergy,
-                maxEnergy: maxEnergy,
-                energyRegenPerTick: energyRegenPerTick,
-                pilotDeployCooldownTick: 200,
-                pilotReturnCooldownTick: 100,
+                configVersion:              "test",
+                sideA:                      cfgA,
+                sideB:                      cfgB,
+                pilotDeployCooldownTick:    200,
+                pilotReturnCooldownTick:    100,
                 pilotKnockoutDroneResumeTick: 50,
-                playerBaseInitialHp: playerBaseHp ?? Fp.FromInt(1000),
-                enemyBaseInitialHp: enemyBaseHp ?? Fp.FromInt(1000),
-                maxBattleTick: maxBattleTick,
-                lanes: lanes,
-                enemySpawnSchedule: enemySpawns);
+                maxBattleTick:              maxBattleTick,
+                lanes:                      lanes,
+                timeOutTieWinnerSide:       timeOutTieWinnerSide);
         }
 
         /// <summary>
         /// Slot 0: energyCost 10, cooldown 100, droneHp 100/atk 10/range 1000/speed 500,
         /// pilotHp 200/atk 20/range 1500/speed 300.
         /// </summary>
-        private static BattleInitialState MinimalInitialState()
+        private static BattleSideInitialState DefaultSideInitialState(BattleSide side)
         {
-            return new BattleInitialState("stage_1", 42L, new SlotDefinition[]
+            return new BattleSideInitialState(side, new SlotDefinition[]
             {
                 new SlotDefinition(
                     slotIndex: 0, pilotId: "pilot_a", droneSquadId: "drone_a",
@@ -123,11 +155,26 @@ namespace BattleSim.Core.Tests.Simulation
             });
         }
 
-        private static SlotState GetSlotState(BattleState state, int slotIndex)
+        private static BattleInitialState MinimalInitialState()
         {
-            foreach (SlotState s in state.Slots)
+            return new BattleInitialState("stage_1", 42L,
+                DefaultSideInitialState(BattleSide.SideA),
+                DefaultSideInitialState(BattleSide.SideB));
+        }
+
+        private static BattleSideState GetSideState(BattleState state, BattleSide side)
+        {
+            foreach (BattleSideState ss in state.Sides)
+                if (ss.Side == side) return ss;
+            throw new InvalidOperationException("Side " + side + " not found in BattleState.");
+        }
+
+        private static SlotState GetSlotState(BattleState state, BattleSide side, int slotIndex)
+        {
+            BattleSideState ss = GetSideState(state, side);
+            foreach (SlotState s in ss.Slots)
                 if (s.SlotIndex == slotIndex) return s;
-            throw new InvalidOperationException("Slot " + slotIndex + " not found in BattleState.");
+            throw new InvalidOperationException("Slot " + slotIndex + " not found for side " + side);
         }
 
         private static LaneState GetLane(BattleState state, string laneId)
@@ -137,23 +184,25 @@ namespace BattleSim.Core.Tests.Simulation
             throw new InvalidOperationException("Lane '" + laneId + "' not found in BattleState.");
         }
 
-        private static BattleEntity? FindByOwner(BattleState state, string laneId, OwnerSide owner)
+        private static BattleEntity? FindByOwner(BattleState state, string laneId, BattleSide owner)
         {
             LaneState lane = GetLane(state, laneId);
             foreach (BattleEntity e in lane.Entities)
-                if (e.OwnerSide == owner) return e;
+                if (e.Side == owner) return e;
             return null;
         }
 
-        // ------------------------------------------------------------------ original skeleton tests
+        // ------------------------------------------------------------------ skeleton tests
 
         private static void ConstructsAndExposesInitialState()
         {
             BattleSimulator sim = new BattleSimulator(MinimalConfig(), MinimalInitialState());
             BattleState s = sim.GetState();
             if (s.CurrentTick != 0) throw new InvalidOperationException("CurrentTick != 0");
-            if (s.PlayerBaseHp != Fp.FromInt(1000)) throw new InvalidOperationException("PlayerBaseHp init");
-            if (s.EnemyBaseHp != Fp.FromInt(1000)) throw new InvalidOperationException("EnemyBaseHp init");
+            if (GetSideState(s, BattleSide.SideA).BaseHp != Fp.FromInt(1000))
+                throw new InvalidOperationException("SideA BaseHp init");
+            if (GetSideState(s, BattleSide.SideB).BaseHp != Fp.FromInt(1000))
+                throw new InvalidOperationException("SideB BaseHp init");
             if (s.IsTerminated) throw new InvalidOperationException("Should not be terminated");
             if (s.EndReason != BattleEndReason.None) throw new InvalidOperationException("EndReason init");
         }
@@ -172,38 +221,49 @@ namespace BattleSim.Core.Tests.Simulation
             bool threw;
             threw = false;
 #pragma warning disable CS8625
-            try { BattleCommand.SpawnDroneSquad(0, 0, null); }
+            try { BattleCommand.SpawnDroneSquad(0, 0, null, BattleSide.SideA); }
 #pragma warning restore CS8625
             catch (ArgumentException) { threw = true; }
             if (!threw) throw new InvalidOperationException("SpawnDroneSquad must require laneId.");
 
             threw = false;
-            try { BattleCommand.DeployPilot(0, 0, ""); }
+            try { BattleCommand.DeployPilot(0, 0, "", BattleSide.SideA); }
             catch (ArgumentException) { threw = true; }
             if (!threw) throw new InvalidOperationException("DeployPilot must require laneId.");
 
-            // RecallPilot: lane policy unresolved — null must NOT throw here (PD-A).
+            // RecallPilot: laneId may be null (keyed by slot+side).
 #pragma warning disable CS8625
-            BattleCommand recall = BattleCommand.RecallPilot(0, 0, null);
+            BattleCommand recall = BattleCommand.RecallPilot(0, 0, null, BattleSide.SideA);
 #pragma warning restore CS8625
             if (recall.CommandType != BattleCommandType.RecallPilot)
                 throw new InvalidOperationException("RecallPilot command type mismatch.");
+            if (recall.Side != BattleSide.SideA)
+                throw new InvalidOperationException("RecallPilot side mismatch.");
         }
 
         private static void BattleResultFromTimeOutResolvesByRatio()
         {
             BattleResult win = BattleResult.FromTimeOut(3600,
-                Fp.FromFraction(7, 10), Fp.FromFraction(3, 10));
-            if (win.Outcome != BattleOutcome.Victory) throw new InvalidOperationException("TimeOut win");
-            if (win.EndReason != BattleEndReason.TimeOut) throw new InvalidOperationException("TimeOut reason");
+                Fp.FromFraction(7, 10), Fp.FromFraction(3, 10), BattleSide.SideB);
+            if (win.WinnerSide != BattleSide.SideA)
+                throw new InvalidOperationException("SideA higher ratio should win. Got: " + win.WinnerSide);
+            if (win.EndReason != BattleEndReason.TimeOut)
+                throw new InvalidOperationException("EndReason should be TimeOut.");
+
+            BattleResult winB = BattleResult.FromTimeOut(3600,
+                Fp.FromFraction(3, 10), Fp.FromFraction(7, 10), BattleSide.SideB);
+            if (winB.WinnerSide != BattleSide.SideB)
+                throw new InvalidOperationException("SideB higher ratio should win.");
 
             BattleResult tie = BattleResult.FromTimeOut(3600,
-                Fp.FromFraction(5, 10), Fp.FromFraction(5, 10));
-            if (tie.Outcome != BattleOutcome.Defeat) throw new InvalidOperationException("Tie must be Defeat");
+                Fp.FromFraction(5, 10), Fp.FromFraction(5, 10), BattleSide.SideB);
+            if (tie.WinnerSide != BattleSide.SideB)
+                throw new InvalidOperationException("Tie should resolve to tieWinnerSide=SideB.");
 
-            BattleResult loss = BattleResult.FromTimeOut(3600,
-                Fp.FromFraction(2, 10), Fp.FromFraction(4, 10));
-            if (loss.Outcome != BattleOutcome.Defeat) throw new InvalidOperationException("TimeOut loss");
+            BattleResult tieA = BattleResult.FromTimeOut(3600,
+                Fp.FromFraction(5, 10), Fp.FromFraction(5, 10), BattleSide.SideA);
+            if (tieA.WinnerSide != BattleSide.SideA)
+                throw new InvalidOperationException("Tie with tieWinnerSide=SideA should resolve to SideA.");
         }
 
         // ------------------------------------------------------------------ v0.1 tests
@@ -225,7 +285,7 @@ namespace BattleSim.Core.Tests.Simulation
                 MakeConfig(Fp.Zero, Fp.FromInt(100), Fp.FromFraction(1, 4)),
                 MinimalInitialState());
             sim.AdvanceTick();
-            Fp energy = sim.GetState().PlayerEnergy;
+            Fp energy = GetSideState(sim.GetState(), BattleSide.SideA).Energy;
             if (energy != Fp.FromFraction(1, 4))
                 throw new InvalidOperationException("Energy should regen to 0.25. Got: " + energy);
 
@@ -234,7 +294,7 @@ namespace BattleSim.Core.Tests.Simulation
                 MakeConfig(Fp.FromInt(99), Fp.FromInt(100), Fp.FromInt(2)),
                 MinimalInitialState());
             sim2.AdvanceTick();
-            Fp energy2 = sim2.GetState().PlayerEnergy;
+            Fp energy2 = GetSideState(sim2.GetState(), BattleSide.SideA).Energy;
             if (energy2 != Fp.FromInt(100))
                 throw new InvalidOperationException("Energy should clamp at MaxEnergy. Got: " + energy2);
         }
@@ -245,14 +305,14 @@ namespace BattleSim.Core.Tests.Simulation
                 MakeConfig(Fp.FromInt(10), Fp.FromInt(100), Fp.Zero),
                 MinimalInitialState());
 
-            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground"));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
             sim.AdvanceTick();
-            int cd1 = GetSlotState(sim.GetState(), 0).DroneCooldownTick;
+            int cd1 = GetSlotState(sim.GetState(), BattleSide.SideA, 0).DroneCooldownTick;
             if (cd1 != 99)
                 throw new InvalidOperationException("Drone cooldown should be 99. Got: " + cd1);
 
             sim.AdvanceTick();
-            int cd2 = GetSlotState(sim.GetState(), 0).DroneCooldownTick;
+            int cd2 = GetSlotState(sim.GetState(), BattleSide.SideA, 0).DroneCooldownTick;
             if (cd2 != 98)
                 throw new InvalidOperationException("Drone cooldown should be 98. Got: " + cd2);
         }
@@ -261,19 +321,19 @@ namespace BattleSim.Core.Tests.Simulation
         {
             BattleSimulator sim = new BattleSimulator(MinimalConfig(), MinimalInitialState());
 
-            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground"));
+            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground", BattleSide.SideA));
             sim.AdvanceTick(); // tick → 1
 #pragma warning disable CS8625
-            sim.SubmitCommand(BattleCommand.RecallPilot(1, 0, null));
+            sim.SubmitCommand(BattleCommand.RecallPilot(1, 0, null, BattleSide.SideA));
 #pragma warning restore CS8625
             sim.AdvanceTick(); // tick → 2, pilotCooldown = 100 → 99
 
-            int cd1 = GetSlotState(sim.GetState(), 0).PilotCooldownTick;
+            int cd1 = GetSlotState(sim.GetState(), BattleSide.SideA, 0).PilotCooldownTick;
             if (cd1 != 99)
                 throw new InvalidOperationException("Pilot cooldown should be 99. Got: " + cd1);
 
             sim.AdvanceTick(); // tick → 3, pilotCooldown → 98
-            int cd2 = GetSlotState(sim.GetState(), 0).PilotCooldownTick;
+            int cd2 = GetSlotState(sim.GetState(), BattleSide.SideA, 0).PilotCooldownTick;
             if (cd2 != 98)
                 throw new InvalidOperationException("Pilot cooldown should be 98. Got: " + cd2);
         }
@@ -284,13 +344,14 @@ namespace BattleSim.Core.Tests.Simulation
                 MakeConfig(Fp.FromInt(10), Fp.FromInt(100), Fp.Zero),
                 MinimalInitialState());
 
-            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground"));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
             sim.AdvanceTick();
 
             BattleState state = sim.GetState();
-            if (state.PlayerEnergy != Fp.Zero)
-                throw new InvalidOperationException("Energy should be 0 after spawn. Got: " + state.PlayerEnergy);
-            int cd = GetSlotState(state, 0).DroneCooldownTick;
+            if (GetSideState(state, BattleSide.SideA).Energy != Fp.Zero)
+                throw new InvalidOperationException("Energy should be 0 after spawn. Got: " +
+                    GetSideState(state, BattleSide.SideA).Energy);
+            int cd = GetSlotState(state, BattleSide.SideA, 0).DroneCooldownTick;
             if (cd != 99)
                 throw new InvalidOperationException("Drone cooldown should be 99. Got: " + cd);
         }
@@ -300,7 +361,7 @@ namespace BattleSim.Core.Tests.Simulation
             BattleSimulator sim = new BattleSimulator(
                 MakeConfig(Fp.FromInt(10), Fp.FromInt(100), Fp.Zero),
                 MinimalInitialState());
-            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "no_such_lane"));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "no_such_lane", BattleSide.SideA));
             bool threw = false;
             try { sim.AdvanceTick(); }
             catch (ArgumentException) { threw = true; }
@@ -310,7 +371,7 @@ namespace BattleSim.Core.Tests.Simulation
         private static void SpawnDroneSquad_RejectsInsufficientEnergy()
         {
             BattleSimulator sim = new BattleSimulator(MinimalConfig(), MinimalInitialState());
-            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground"));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
             bool threw = false;
             try { sim.AdvanceTick(); }
             catch (InvalidOperationException) { threw = true; }
@@ -323,10 +384,10 @@ namespace BattleSim.Core.Tests.Simulation
                 MakeConfig(Fp.FromInt(50), Fp.FromInt(100), Fp.Zero),
                 MinimalInitialState());
 
-            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground"));
+            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground", BattleSide.SideA));
             sim.AdvanceTick(); // tick → 1, pilot deployed
 
-            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(1, 0, "lane_ground"));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(1, 0, "lane_ground", BattleSide.SideA));
             bool threw = false;
             try { sim.AdvanceTick(); }
             catch (InvalidOperationException) { threw = true; }
@@ -338,9 +399,9 @@ namespace BattleSim.Core.Tests.Simulation
             BattleSimulator sim = new BattleSimulator(
                 MakeConfig(Fp.FromInt(50), Fp.FromInt(100), Fp.Zero),
                 MinimalInitialState());
-            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground"));
+            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground", BattleSide.SideA));
             sim.AdvanceTick();
-            Fp energy = sim.GetState().PlayerEnergy;
+            Fp energy = GetSideState(sim.GetState(), BattleSide.SideA).Energy;
             if (energy != Fp.FromInt(50))
                 throw new InvalidOperationException("DeployPilot should not consume energy. Got: " + energy);
         }
@@ -348,28 +409,27 @@ namespace BattleSim.Core.Tests.Simulation
         private static void DeployPilot_SetsPilotDeployed()
         {
             BattleSimulator sim = new BattleSimulator(MinimalConfig(), MinimalInitialState());
-            if (GetSlotState(sim.GetState(), 0).IsPilotDeployed)
+            if (GetSlotState(sim.GetState(), BattleSide.SideA, 0).IsPilotDeployed)
                 throw new InvalidOperationException("Pilot should not be deployed initially.");
 
-            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground"));
+            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground", BattleSide.SideA));
             sim.AdvanceTick();
 
-            if (!GetSlotState(sim.GetState(), 0).IsPilotDeployed)
+            if (!GetSlotState(sim.GetState(), BattleSide.SideA, 0).IsPilotDeployed)
                 throw new InvalidOperationException("Pilot should be deployed after DeployPilot command.");
         }
 
         private static void RecallPilot_ClearsPilotAndStartsCooldown()
         {
             BattleSimulator sim = new BattleSimulator(MinimalConfig(), MinimalInitialState());
-            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground"));
+            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground", BattleSide.SideA));
             sim.AdvanceTick(); // tick → 1
-
 #pragma warning disable CS8625
-            sim.SubmitCommand(BattleCommand.RecallPilot(1, 0, null));
+            sim.SubmitCommand(BattleCommand.RecallPilot(1, 0, null, BattleSide.SideA));
 #pragma warning restore CS8625
             sim.AdvanceTick(); // tick → 2
 
-            SlotState slot = GetSlotState(sim.GetState(), 0);
+            SlotState slot = GetSlotState(sim.GetState(), BattleSide.SideA, 0);
             if (slot.IsPilotDeployed)
                 throw new InvalidOperationException("Pilot should not be deployed after recall.");
             if (slot.PilotCooldownTick != 99)
@@ -380,7 +440,7 @@ namespace BattleSim.Core.Tests.Simulation
         {
             BattleSimulator sim = new BattleSimulator(MinimalConfig(), MinimalInitialState());
 #pragma warning disable CS8625
-            sim.SubmitCommand(BattleCommand.RecallPilot(0, 0, null));
+            sim.SubmitCommand(BattleCommand.RecallPilot(0, 0, null, BattleSide.SideA));
 #pragma warning restore CS8625
             bool threw = false;
             try { sim.AdvanceTick(); }
@@ -406,49 +466,58 @@ namespace BattleSim.Core.Tests.Simulation
                 throw new InvalidOperationException("EndReason should be TimeOut. Got: " + result.EndReason);
         }
 
-        private static void TimeoutTie_ProducesDefeat()
+        private static void TimeoutTie_TieWinnerSideWins()
         {
             BattleSimulator sim = new BattleSimulator(
-                MakeConfig(Fp.Zero, Fp.FromInt(100), Fp.Zero, maxBattleTick: 1),
+                MakeConfig(Fp.Zero, Fp.FromInt(100), Fp.Zero, maxBattleTick: 1,
+                    timeOutTieWinnerSide: BattleSide.SideB),
                 MinimalInitialState());
-
             sim.AdvanceTick();
-
             BattleResult result = sim.GetResult();
-            if (result.Outcome != BattleOutcome.Defeat)
-                throw new InvalidOperationException("Timeout tie should produce Defeat. Got: " + result.Outcome);
+            if (result.WinnerSide != BattleSide.SideB)
+                throw new InvalidOperationException("Timeout tie should resolve to SideB (tieWinnerSide). Got: " + result.WinnerSide);
+
+            // Also verify SideA tieWinnerSide works.
+            BattleSimulator sim2 = new BattleSimulator(
+                MakeConfig(Fp.Zero, Fp.FromInt(100), Fp.Zero, maxBattleTick: 1,
+                    timeOutTieWinnerSide: BattleSide.SideA),
+                MinimalInitialState());
+            sim2.AdvanceTick();
+            BattleResult result2 = sim2.GetResult();
+            if (result2.WinnerSide != BattleSide.SideA)
+                throw new InvalidOperationException("Timeout tie with tieWinnerSide=SideA should resolve to SideA.");
         }
 
         // ------------------------------------------------------------------ v0.2 tests
 
-        // v2-1. SpawnDroneSquad creates player entity in selected lane.
+        // v2-1. SpawnDroneSquad creates SideA entity in selected lane.
         private static void SpawnDroneSquad_CreatesEntityInLane()
         {
             BattleSimulator sim = new BattleSimulator(
                 MakeConfig(Fp.FromInt(10), Fp.FromInt(100), Fp.Zero),
                 MinimalInitialState());
 
-            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground"));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
             sim.AdvanceTick();
 
-            BattleEntity? entity = FindByOwner(sim.GetState(), "lane_ground", OwnerSide.Player);
+            BattleEntity? entity = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideA);
             if (entity == null)
-                throw new InvalidOperationException("SpawnDroneSquad should create a player entity in lane_ground.");
-            if (entity.OwnerSide != OwnerSide.Player)
-                throw new InvalidOperationException("Entity owner should be Player.");
+                throw new InvalidOperationException("SpawnDroneSquad should create a SideA entity in lane_ground.");
+            if (entity.Side != BattleSide.SideA)
+                throw new InvalidOperationException("Entity owner should be SideA.");
         }
 
-        // v2-2. DeployPilot creates player pilot entity in selected lane.
+        // v2-2. DeployPilot creates SideA pilot entity in selected lane.
         private static void DeployPilot_CreatesEntityInLane()
         {
             BattleSimulator sim = new BattleSimulator(MinimalConfig(), MinimalInitialState());
 
-            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground"));
+            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground", BattleSide.SideA));
             sim.AdvanceTick();
 
-            BattleEntity? entity = FindByOwner(sim.GetState(), "lane_ground", OwnerSide.Player);
+            BattleEntity? entity = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideA);
             if (entity == null)
-                throw new InvalidOperationException("DeployPilot should create a player entity in lane_ground.");
+                throw new InvalidOperationException("DeployPilot should create a SideA entity in lane_ground.");
         }
 
         // v2-3. RecallPilot removes deployed pilot entity.
@@ -456,11 +525,10 @@ namespace BattleSim.Core.Tests.Simulation
         {
             BattleSimulator sim = new BattleSimulator(MinimalConfig(), MinimalInitialState());
 
-            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground"));
+            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground", BattleSide.SideA));
             sim.AdvanceTick(); // pilot entity created
-
 #pragma warning disable CS8625
-            sim.SubmitCommand(BattleCommand.RecallPilot(1, 0, null));
+            sim.SubmitCommand(BattleCommand.RecallPilot(1, 0, null, BattleSide.SideA));
 #pragma warning restore CS8625
             sim.AdvanceTick(); // pilot entity removed
 
@@ -470,88 +538,111 @@ namespace BattleSim.Core.Tests.Simulation
                     "Lane should be empty after pilot recall. Found " + lane.Entities.Count + " entities.");
         }
 
-        // v2-4. Enemy spawn schedule creates enemy entity at configured tick.
-        private static void EnemySpawnSchedule_CreatesEnemyAtConfiguredTick()
+        // v2-4. SideB SpawnDroneSquad creates entity at far end of lane (LaneLengthMilli).
+        private static void SideBCommand_CreatesEntityAtFarEnd()
         {
             BattleConfigSnapshot cfg = MakeConfig(
                 Fp.Zero, Fp.FromInt(100), Fp.Zero,
-                enemySpawns: new EnemySpawnDefinition[]
-                {
-                    new EnemySpawnDefinition(1, "lane_ground", Fp.FromInt(50), Fp.FromInt(5), 500L, 200L),
-                });
+                sideBInitialEnergy: Fp.FromInt(10));
             BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
 
-            sim.AdvanceTick(); // tick → 1, enemy spawns
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+            sim.AdvanceTick();
 
-            BattleEntity? enemy = FindByOwner(sim.GetState(), "lane_ground", OwnerSide.Enemy);
-            if (enemy == null)
-                throw new InvalidOperationException("Enemy should have spawned at tick 1 per schedule.");
-            if (enemy.OwnerSide != OwnerSide.Enemy)
-                throw new InvalidOperationException("Entity owner should be Enemy.");
+            BattleEntity? entity = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideB);
+            if (entity == null)
+                throw new InvalidOperationException("SideB SpawnDroneSquad should create a SideB entity.");
+            if (entity.Side != BattleSide.SideB)
+                throw new InvalidOperationException("Entity owner should be SideB.");
         }
 
-        // v2-5. Player entity moves toward enemy base within same lane.
-        private static void PlayerEntity_MovesTowardEnemyBase()
+        // v2-5. SideA entity moves toward SideB base (position increases).
+        private static void SideAEntity_MovesTowardSideBBase()
         {
-            // Large lane, no enemies → drone moves forward freely.
             BattleSimulator sim = new BattleSimulator(
                 MakeConfig(Fp.FromInt(10), Fp.FromInt(100), Fp.Zero),
                 MinimalInitialState());
 
-            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground"));
-            sim.AdvanceTick(); // tick → 1, drone at 0+500=500
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.AdvanceTick(); // drone starts at 0, moves to 500
 
-            BattleEntity? drone = FindByOwner(sim.GetState(), "lane_ground", OwnerSide.Player);
-            if (drone == null) throw new InvalidOperationException("Player entity not found.");
+            BattleEntity? drone = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideA);
+            if (drone == null) throw new InvalidOperationException("SideA entity not found.");
             if (drone.PositionMilli <= 0)
                 throw new InvalidOperationException(
-                    "Player entity should have moved toward enemy base. Pos: " + drone.PositionMilli);
+                    "SideA entity should have moved toward SideB base. Pos: " + drone.PositionMilli);
         }
 
-        // v2-6. Enemy entity moves toward player base within same lane.
-        private static void EnemyEntity_MovesTowardPlayerBase()
+        // v2-6. SideB entity moves toward SideA base (position decreases).
+        private static void SideBEntity_MovesTowardSideABase()
         {
-            long laneLen = DefaultLaneLen;
             BattleConfigSnapshot cfg = MakeConfig(
                 Fp.Zero, Fp.FromInt(100), Fp.Zero,
-                enemySpawns: new EnemySpawnDefinition[]
-                {
-                    new EnemySpawnDefinition(1, "lane_ground", Fp.FromInt(50), Fp.FromInt(5), 500L, 200L),
-                });
+                sideBInitialEnergy: Fp.FromInt(10));
             BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
 
-            sim.AdvanceTick(); // tick → 1: enemy spawns at laneLen, moves to laneLen-200
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+            sim.AdvanceTick(); // SideB entity at laneLen, moves toward 0
 
-            BattleEntity? enemy = FindByOwner(sim.GetState(), "lane_ground", OwnerSide.Enemy);
-            if (enemy == null) throw new InvalidOperationException("Enemy entity not found.");
-            if (enemy.PositionMilli >= laneLen)
+            BattleEntity? entity = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideB);
+            if (entity == null) throw new InvalidOperationException("SideB entity not found.");
+            if (entity.PositionMilli >= DefaultLaneLen)
                 throw new InvalidOperationException(
-                    "Enemy entity should have moved toward player base. Pos: " + enemy.PositionMilli);
+                    "SideB entity should have moved toward SideA base. Pos: " + entity.PositionMilli);
         }
 
-        // v2-7. Entity never changes lane.
+        // v2-7. SideA and SideB can submit commands at the same tick.
+        private static void SideAAndSideB_CanSubmitCommandsAtSameTick()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(
+                Fp.FromInt(10), Fp.FromInt(100), Fp.Zero,
+                sideBInitialEnergy: Fp.FromInt(10));
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+            sim.AdvanceTick();
+
+            BattleState state = sim.GetState();
+            BattleEntity? eA = FindByOwner(state, "lane_ground", BattleSide.SideA);
+            BattleEntity? eB = FindByOwner(state, "lane_ground", BattleSide.SideB);
+            if (eA == null) throw new InvalidOperationException("SideA entity not found after same-tick commands.");
+            if (eB == null) throw new InvalidOperationException("SideB entity not found after same-tick commands.");
+        }
+
+        // v2-8. Entity never changes lane.
         private static void Entity_NeverChangesLane()
         {
-            // Two-lane config; entity spawned in lane_a must never appear in lane_b.
             LaneDefinition[] lanes = new LaneDefinition[]
             {
                 new LaneDefinition("lane_a", LaneType.Ground, DefaultLaneLen),
                 new LaneDefinition("lane_b", LaneType.Ground, DefaultLaneLen),
             };
+            BattleSideConfig cfgA = new BattleSideConfig(
+                BattleSide.SideA, Fp.FromInt(1000), Fp.FromInt(10), Fp.FromInt(100), Fp.Zero);
+            BattleSideConfig cfgB = new BattleSideConfig(
+                BattleSide.SideB, Fp.FromInt(1000), Fp.Zero, Fp.FromInt(100), Fp.Zero);
             BattleConfigSnapshot cfg = new BattleConfigSnapshot(
-                "test", Fp.FromInt(10), Fp.FromInt(100), Fp.Zero,
-                200, 100, 50,
-                Fp.FromInt(1000), Fp.FromInt(1000), 3600, lanes);
-            BattleInitialState initial = new BattleInitialState("stage_1", 42L, new SlotDefinition[]
+                "test", cfgA, cfgB, 200, 100, 50, 3600, lanes);
+
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
             {
                 new SlotDefinition(
                     0, "pilot_a", "drone_a", Fp.FromInt(10), 100,
                     Fp.FromInt(100), Fp.FromInt(10), 1_000L, 500L,
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
             });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                new SlotDefinition(
+                    0, "pilot_b", "drone_b", Fp.FromInt(10), 100,
+                    Fp.FromInt(100), Fp.FromInt(10), 1_000L, 500L,
+                    Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
             BattleSimulator sim = new BattleSimulator(cfg, initial);
 
-            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_a"));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_a", BattleSide.SideA));
             for (int i = 0; i < 5; i++) sim.AdvanceTick();
 
             BattleState state = sim.GetState();
@@ -563,187 +654,326 @@ namespace BattleSim.Core.Tests.Simulation
                 if (ls.LaneId == "lane_a" && ls.Entities.Count > 0)
                     foundInA = true;
             }
-            if (!foundInA) throw new InvalidOperationException("Player entity not found in lane_a.");
+            if (!foundInA) throw new InvalidOperationException("SideA entity not found in lane_a.");
         }
 
-        // v2-8. Entity attacks nearest enemy in same lane (doesn't move while attacking).
-        private static void Entity_AttacksNearestEnemyInSameLane()
+        // v2-9. Entity attacks nearest opponent in same lane (doesn't move while attacking).
+        private static void Entity_AttacksNearestOpponentInSameLane()
         {
-            // Short lane; drone range covers the full lane → always in attack range of spawned enemy.
+            // Short lane; SideA drone range covers the full lane → always in attack range of SideB entity.
             long laneLen = 1_000L;
             BattleConfigSnapshot cfg = MakeConfig(
                 Fp.FromInt(10), Fp.FromInt(100), Fp.Zero,
                 laneLengthMilli: laneLen,
-                enemySpawns: new EnemySpawnDefinition[]
-                {
-                    // Spawns at tick 1 at position laneLen=1000; drone range=2000 covers it.
-                    new EnemySpawnDefinition(1, "lane_ground", Fp.FromInt(50), Fp.FromInt(5), 500L, 100L),
-                });
-            BattleInitialState initial = new BattleInitialState("stage_1", 42L, new SlotDefinition[]
+                sideBInitialEnergy: Fp.FromInt(10));
+
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
             {
                 new SlotDefinition(
                     0, "pilot_a", "drone_a", Fp.FromInt(10), 100,
                     Fp.FromInt(200), Fp.FromInt(10), 2_000L, 500L, // drone range=2000 (> laneLen=1000)
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
             });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                new SlotDefinition(
+                    0, "pilot_b", "drone_b", Fp.FromInt(10), 100,
+                    Fp.FromInt(50), Fp.FromInt(5), 500L, 100L,     // SideB entity HP=50, range=500
+                    Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
             BattleSimulator sim = new BattleSimulator(cfg, initial);
 
-            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground"));
-            sim.AdvanceTick(); // tick 0→1: drone at 0, enemy at 1000; drone attacks enemy, enemy moves
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+            sim.AdvanceTick(); // SideA drone attacks SideB entity; SideB entity out of range → moves
 
             BattleState state = sim.GetState();
-            BattleEntity? drone = FindByOwner(state, "lane_ground", OwnerSide.Player);
-            BattleEntity? enemy = FindByOwner(state, "lane_ground", OwnerSide.Enemy);
+            BattleEntity? drone = FindByOwner(state, "lane_ground", BattleSide.SideA);
+            BattleEntity? sideBEntity = FindByOwner(state, "lane_ground", BattleSide.SideB);
 
-            if (drone == null) throw new InvalidOperationException("Drone not found after tick.");
+            if (drone == null) throw new InvalidOperationException("SideA drone not found after tick.");
             if (drone.PositionMilli != 0)
                 throw new InvalidOperationException(
                     "Drone should not have moved while attacking. Pos: " + drone.PositionMilli);
-            if (enemy == null) throw new InvalidOperationException("Enemy should still be alive (HP > 0).");
-            if (enemy.Hp >= Fp.FromInt(50))
+            if (sideBEntity == null)
+                throw new InvalidOperationException("SideB entity should still be alive (HP > 0).");
+            if (sideBEntity.Hp >= Fp.FromInt(50))
                 throw new InvalidOperationException(
-                    "Enemy HP should have decreased from drone attack. HP: " + enemy.Hp);
+                    "SideB entity HP should have decreased from drone attack. HP: " + sideBEntity.Hp);
         }
 
-        // v2-9. Dead entity is removed.
+        // v2-10. Entity only attacks opposite owner in same lane.
+        private static void Entity_OnlyAttacksOppositeOwner()
+        {
+            // Two SideA entities + one SideB entity in the same lane.
+            // SideA entities should only attack the SideB entity, not each other.
+            long laneLen = 2_000L;
+            BattleConfigSnapshot cfg = MakeConfig(
+                Fp.FromInt(20), Fp.FromInt(100), Fp.Zero,
+                laneLengthMilli: laneLen,
+                sideBInitialEnergy: Fp.FromInt(10));
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                new SlotDefinition(
+                    0, "p0", "d0", Fp.FromInt(10), 5,
+                    Fp.FromInt(100), Fp.FromInt(10), 3_000L, 200L, // range covers whole lane
+                    Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
+                new SlotDefinition(
+                    1, "p1", "d1", Fp.FromInt(10), 5,
+                    Fp.FromInt(100), Fp.FromInt(10), 3_000L, 200L,
+                    Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
+            });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                new SlotDefinition(
+                    0, "pb", "db", Fp.FromInt(10), 5,
+                    Fp.FromInt(50), Fp.FromInt(5), 500L, 100L,
+                    Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 1, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+            sim.AdvanceTick();
+
+            BattleState state = sim.GetState();
+            LaneState lane = GetLane(state, "lane_ground");
+            int sideACount = 0;
+            foreach (BattleEntity e in lane.Entities)
+                if (e.Side == BattleSide.SideA) sideACount++;
+
+            // Both SideA entities attacked SideB entity; SideA entities should be unharmed by each other.
+            if (sideACount < 2)
+                throw new InvalidOperationException(
+                    "Both SideA entities should survive — they must not attack each other. Count: " + sideACount);
+        }
+
+        // v2-11. Dead entity is removed.
         private static void DeadEntity_IsRemoved()
         {
-            // Drone attack (10) × 1 hit kills enemy (HP=5).
+            // SideA drone attack 10 × 1 hit kills SideB entity (HP=5).
             long laneLen = 1_000L;
             BattleConfigSnapshot cfg = MakeConfig(
                 Fp.FromInt(10), Fp.FromInt(100), Fp.Zero,
                 laneLengthMilli: laneLen,
-                enemySpawns: new EnemySpawnDefinition[]
-                {
-                    new EnemySpawnDefinition(1, "lane_ground", Fp.FromInt(5), Fp.FromInt(2), 500L, 100L),
-                });
-            BattleInitialState initial = new BattleInitialState("stage_1", 42L, new SlotDefinition[]
+                sideBInitialEnergy: Fp.FromInt(10));
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
             {
                 new SlotDefinition(
-                    0, "pilot_a", "drone_a", Fp.FromInt(10), 100,
-                    Fp.FromInt(200), Fp.FromInt(10), 2_000L, 500L, // drone attack=10, kills enemy(hp=5) in 1 hit
+                    0, "p", "d", Fp.FromInt(10), 100,
+                    Fp.FromInt(200), Fp.FromInt(10), 2_000L, 500L, // drone atk=10, kills SideB(HP=5) in 1 hit
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
             });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                new SlotDefinition(
+                    0, "pb", "db", Fp.FromInt(10), 100,
+                    Fp.FromInt(5), Fp.FromInt(2), 500L, 100L,      // HP=5 → one-shot
+                    Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
             BattleSimulator sim = new BattleSimulator(cfg, initial);
 
-            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground"));
-            sim.AdvanceTick(); // drone attacks enemy → enemy dies → removed
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+            sim.AdvanceTick(); // SideA drone attacks SideB entity → dead → removed
 
             LaneState lane = GetLane(sim.GetState(), "lane_ground");
-            int enemyCount = 0;
+            int sideBCount = 0;
             foreach (BattleEntity e in lane.Entities)
-                if (e.OwnerSide == OwnerSide.Enemy) enemyCount++;
-            if (enemyCount != 0)
-                throw new InvalidOperationException("Dead enemy should have been removed. Found: " + enemyCount);
+                if (e.Side == BattleSide.SideB) sideBCount++;
+            if (sideBCount != 0)
+                throw new InvalidOperationException("Dead SideB entity should have been removed. Found: " + sideBCount);
         }
 
-        // v2-10. Player entity reaching enemy base damages enemy base.
-        private static void PlayerEntity_DamagesEnemyBase()
+        // v2-12. SideA entity reaching SideB base wall damages SideB base.
+        private static void SideAEntity_DamagesSideBBase()
         {
-            // Lane 1000 milli, drone speed 2000 (exceeds lane) → reaches enemy base in 1 tick.
             long laneLen = 1_000L;
             BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(10), Fp.FromInt(100), Fp.Zero,
                 laneLengthMilli: laneLen);
-            BattleInitialState initial = new BattleInitialState("stage_1", 42L, new SlotDefinition[]
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
             {
                 new SlotDefinition(
-                    0, "pilot_a", "drone_a", Fp.FromInt(10), 100,
+                    0, "p", "d", Fp.FromInt(10), 100,
                     Fp.FromInt(100), Fp.FromInt(10), 500L, 2_000L, // speed=2000 > laneLen=1000
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
             });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA,
+                DefaultSideInitialState(BattleSide.SideB));
             BattleSimulator sim = new BattleSimulator(cfg, initial);
 
-            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground"));
-            sim.AdvanceTick(); // drone reaches laneLen → attacks enemy base
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.AdvanceTick(); // drone reaches SideB base wall → attacks SideB base
 
-            Fp enemyBaseHp = sim.GetState().EnemyBaseHp;
-            if (enemyBaseHp >= Fp.FromInt(1000))
+            Fp sideBBaseHp = GetSideState(sim.GetState(), BattleSide.SideB).BaseHp;
+            if (sideBBaseHp >= Fp.FromInt(1000))
                 throw new InvalidOperationException(
-                    "Enemy base HP should have decreased. Got: " + enemyBaseHp);
+                    "SideB base HP should have decreased. Got: " + sideBBaseHp);
         }
 
-        // v2-11. Enemy entity reaching player base damages player base.
-        private static void EnemyEntity_DamagesPlayerBase()
+        // v2-13. SideB entity reaching SideA base wall damages SideA base.
+        private static void SideBEntity_DamagesSideABase()
         {
             long laneLen = 1_000L;
             BattleConfigSnapshot cfg = MakeConfig(
                 Fp.Zero, Fp.FromInt(100), Fp.Zero,
                 laneLengthMilli: laneLen,
-                enemySpawns: new EnemySpawnDefinition[]
-                {
-                    // speed=2000 exceeds laneLen=1000 → reaches player base in same tick
-                    new EnemySpawnDefinition(1, "lane_ground", Fp.FromInt(50), Fp.FromInt(10), 500L, 2_000L),
-                });
-            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+                sideBInitialEnergy: Fp.FromInt(10));
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                new SlotDefinition(
+                    0, "pb", "db", Fp.FromInt(10), 100,
+                    Fp.FromInt(50), Fp.FromInt(10), 500L, 2_000L,  // speed=2000 > laneLen=1000
+                    Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L,
+                DefaultSideInitialState(BattleSide.SideA), sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
 
-            sim.AdvanceTick(); // enemy spawns at 1000, moves to 0 → attacks player base
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+            sim.AdvanceTick(); // SideB entity reaches SideA base wall → attacks SideA base
 
-            Fp playerBaseHp = sim.GetState().PlayerBaseHp;
-            if (playerBaseHp >= Fp.FromInt(1000))
+            Fp sideABaseHp = GetSideState(sim.GetState(), BattleSide.SideA).BaseHp;
+            if (sideABaseHp >= Fp.FromInt(1000))
                 throw new InvalidOperationException(
-                    "Player base HP should have decreased. Got: " + playerBaseHp);
+                    "SideA base HP should have decreased. Got: " + sideABaseHp);
         }
 
-        // v2-12. Enemy base destroyed produces Victory + EnemyBaseDestroyed.
-        private static void EnemyBaseDestroyed_ProducesVictory()
+        // v2-14. SideB base destroyed → WinnerSide=SideA / SideBBaseDestroyed.
+        private static void SideBBaseDestroyed_SideAWins()
         {
-            // EnemyBaseHp=1, drone attack=50, lane=1000, speed=2000 → reaches base in 1 tick → destroys it.
             long laneLen = 1_000L;
             BattleConfigSnapshot cfg = MakeConfig(
                 Fp.FromInt(10), Fp.FromInt(100), Fp.Zero,
                 laneLengthMilli: laneLen,
-                enemyBaseHp: Fp.FromInt(1));
-            BattleInitialState initial = new BattleInitialState("stage_1", 42L, new SlotDefinition[]
+                sideBBaseHp: Fp.FromInt(1));
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
             {
                 new SlotDefinition(
-                    0, "pilot_a", "drone_a", Fp.FromInt(10), 100,
+                    0, "p", "d", Fp.FromInt(10), 100,
                     Fp.FromInt(100), Fp.FromInt(50), 500L, 2_000L, // attack=50, speed=2000
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
             });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA,
+                DefaultSideInitialState(BattleSide.SideB));
             BattleSimulator sim = new BattleSimulator(cfg, initial);
 
-            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground"));
-            sim.AdvanceTick(); // drone reaches enemy base (HP=1), attacks for 50 → enemy base destroyed
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.AdvanceTick(); // drone reaches SideB base (HP=1), attacks for 50 → destroyed
 
             if (!sim.IsTerminated)
                 throw new InvalidOperationException("Battle should have terminated.");
             BattleResult result = sim.GetResult();
-            if (result.Outcome != BattleOutcome.Victory)
-                throw new InvalidOperationException("Outcome should be Victory. Got: " + result.Outcome);
-            if (result.EndReason != BattleEndReason.EnemyBaseDestroyed)
-                throw new InvalidOperationException("EndReason should be EnemyBaseDestroyed. Got: " + result.EndReason);
+            if (result.WinnerSide != BattleSide.SideA)
+                throw new InvalidOperationException("WinnerSide should be SideA. Got: " + result.WinnerSide);
+            if (result.EndReason != BattleEndReason.SideBBaseDestroyed)
+                throw new InvalidOperationException("EndReason should be SideBBaseDestroyed. Got: " + result.EndReason);
         }
 
-        // v2-13. Player base destroyed produces Defeat + PlayerBaseDestroyed.
-        private static void PlayerBaseDestroyed_ProducesDefeat()
+        // v2-15. SideA base destroyed → WinnerSide=SideB / SideABaseDestroyed.
+        private static void SideABaseDestroyed_SideBWins()
         {
-            // PlayerBaseHp=1, enemy attack=50, lane=1000, speed=2000 → reaches player base in 1 tick.
             long laneLen = 1_000L;
             BattleConfigSnapshot cfg = MakeConfig(
                 Fp.Zero, Fp.FromInt(100), Fp.Zero,
                 laneLengthMilli: laneLen,
-                playerBaseHp: Fp.FromInt(1),
-                enemySpawns: new EnemySpawnDefinition[]
-                {
-                    new EnemySpawnDefinition(1, "lane_ground", Fp.FromInt(50), Fp.FromInt(50), 500L, 2_000L),
-                });
-            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+                sideABaseHp: Fp.FromInt(1),
+                sideBInitialEnergy: Fp.FromInt(10));
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                new SlotDefinition(
+                    0, "pb", "db", Fp.FromInt(10), 100,
+                    Fp.FromInt(50), Fp.FromInt(50), 500L, 2_000L,  // attack=50, speed=2000
+                    Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L,
+                DefaultSideInitialState(BattleSide.SideA), sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
 
-            sim.AdvanceTick(); // enemy spawns → reaches player base (HP=1) → attacks for 50 → destroyed
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+            sim.AdvanceTick(); // SideB entity reaches SideA base (HP=1), attacks for 50 → destroyed
 
             if (!sim.IsTerminated)
                 throw new InvalidOperationException("Battle should have terminated.");
             BattleResult result = sim.GetResult();
-            if (result.Outcome != BattleOutcome.Defeat)
-                throw new InvalidOperationException("Outcome should be Defeat. Got: " + result.Outcome);
-            if (result.EndReason != BattleEndReason.PlayerBaseDestroyed)
-                throw new InvalidOperationException("EndReason should be PlayerBaseDestroyed. Got: " + result.EndReason);
+            if (result.WinnerSide != BattleSide.SideB)
+                throw new InvalidOperationException("WinnerSide should be SideB. Got: " + result.WinnerSide);
+            if (result.EndReason != BattleEndReason.SideABaseDestroyed)
+                throw new InvalidOperationException("EndReason should be SideABaseDestroyed. Got: " + result.EndReason);
         }
 
-        // v2-14. Timeout behavior from v0.1 remains passing.
+        // v2-16. Timeout: SideA wins by HP ratio (SideB base was damaged more).
+        private static void Timeout_SideAWinsByHpRatio()
+        {
+            long laneLen = 1_000L;
+            // SideA drone: speed=2000, attack=10. Reaches SideB base and deals 10 damage.
+            // maxBattleTick=2 → SideA base HP=1.0, SideB base HP=990/1000=0.99 → SideA wins.
+            BattleConfigSnapshot cfg = MakeConfig(
+                Fp.FromInt(10), Fp.FromInt(100), Fp.Zero,
+                maxBattleTick: 2,
+                laneLengthMilli: laneLen,
+                sideBBaseHp: Fp.FromInt(1000));
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                new SlotDefinition(
+                    0, "p", "d", Fp.FromInt(10), 100,
+                    Fp.FromInt(100), Fp.FromInt(10), 500L, 2_000L,
+                    Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA,
+                DefaultSideInitialState(BattleSide.SideB));
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            while (!sim.IsTerminated) sim.AdvanceTick();
+
+            BattleResult result = sim.GetResult();
+            if (result.EndReason != BattleEndReason.TimeOut)
+                throw new InvalidOperationException("EndReason should be TimeOut.");
+            if (result.WinnerSide != BattleSide.SideA)
+                throw new InvalidOperationException(
+                    "SideA should win by HP ratio. Got WinnerSide: " + result.WinnerSide);
+        }
+
+        // v2-17. Timeout: SideB wins by HP ratio (SideA base was damaged more).
+        private static void Timeout_SideBWinsByHpRatio()
+        {
+            long laneLen = 1_000L;
+            BattleConfigSnapshot cfg = MakeConfig(
+                Fp.Zero, Fp.FromInt(100), Fp.Zero,
+                maxBattleTick: 2,
+                laneLengthMilli: laneLen,
+                sideABaseHp: Fp.FromInt(1000),
+                sideBInitialEnergy: Fp.FromInt(10));
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                new SlotDefinition(
+                    0, "pb", "db", Fp.FromInt(10), 100,
+                    Fp.FromInt(100), Fp.FromInt(10), 500L, 2_000L,
+                    Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L,
+                DefaultSideInitialState(BattleSide.SideA), sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+            while (!sim.IsTerminated) sim.AdvanceTick();
+
+            BattleResult result = sim.GetResult();
+            if (result.EndReason != BattleEndReason.TimeOut)
+                throw new InvalidOperationException("EndReason should be TimeOut.");
+            if (result.WinnerSide != BattleSide.SideB)
+                throw new InvalidOperationException(
+                    "SideB should win by HP ratio. Got WinnerSide: " + result.WinnerSide);
+        }
+
+        // v2-18. Timeout behavior (no entities) remains passing.
         private static void MaxBattleTick_TimeoutStillWorks()
         {
-            // No entities, no spawns; should time out cleanly.
             BattleSimulator sim = new BattleSimulator(
                 MakeConfig(Fp.Zero, Fp.FromInt(100), Fp.Zero, maxBattleTick: 2),
                 MinimalInitialState());
@@ -756,97 +986,93 @@ namespace BattleSim.Core.Tests.Simulation
 
         // ------------------------------------------------------------------ smoke scenario tests
 
-        // smoke-1. Player victory scenario: SpawnDroneSquad destroys enemy base at tick 1.
-        private static void Smoke_PlayerVictory_ProducesExpectedResult()
+        private static void Smoke_SideAVictory_ProducesExpectedResult()
         {
-            var (cfg, initial, commands) = SmokeScenarios.PlayerVictory();
+            var (cfg, initial, commands) = SmokeScenarios.SideAVictory();
             BattleResult result = SmokeScenarios.RunToCompletion(cfg, initial, commands);
 
-            if (result.Outcome != BattleOutcome.Victory)
+            if (result.WinnerSide != BattleSide.SideA)
                 throw new InvalidOperationException(
-                    "Smoke Victory: outcome should be Victory. Got: " + result.Outcome);
-            if (result.EndReason != BattleEndReason.EnemyBaseDestroyed)
+                    "Smoke SideAVictory: WinnerSide should be SideA. Got: " + result.WinnerSide);
+            if (result.EndReason != BattleEndReason.SideBBaseDestroyed)
                 throw new InvalidOperationException(
-                    "Smoke Victory: end reason should be EnemyBaseDestroyed. Got: " + result.EndReason);
+                    "Smoke SideAVictory: EndReason should be SideBBaseDestroyed. Got: " + result.EndReason);
             if (result.ClearTimeTick != 1)
                 throw new InvalidOperationException(
-                    "Smoke Victory: should end at tick 1. Got: " + result.ClearTimeTick);
-            if (result.PlayerBaseHpRatio != Fp.One)
+                    "Smoke SideAVictory: should end at tick 1. Got: " + result.ClearTimeTick);
+            if (result.SideABaseHpRatio != Fp.One)
                 throw new InvalidOperationException(
-                    "Smoke Victory: player base hp ratio should be 1.0. Got: " + result.PlayerBaseHpRatio);
-            if (result.EnemyBaseHpRatio != Fp.Zero)
+                    "Smoke SideAVictory: SideA base hp ratio should be 1.0. Got: " + result.SideABaseHpRatio);
+            if (result.SideBBaseHpRatio != Fp.Zero)
                 throw new InvalidOperationException(
-                    "Smoke Victory: enemy base hp ratio should be 0.0. Got: " + result.EnemyBaseHpRatio);
+                    "Smoke SideAVictory: SideB base hp ratio should be 0.0. Got: " + result.SideBBaseHpRatio);
         }
 
-        // smoke-2. Player defeat scenario: enemy schedule destroys player base at tick 1.
-        private static void Smoke_PlayerDefeat_ProducesExpectedResult()
+        private static void Smoke_SideBVictory_ProducesExpectedResult()
         {
-            var (cfg, initial, commands) = SmokeScenarios.PlayerDefeat();
+            var (cfg, initial, commands) = SmokeScenarios.SideBVictory();
             BattleResult result = SmokeScenarios.RunToCompletion(cfg, initial, commands);
 
-            if (result.Outcome != BattleOutcome.Defeat)
+            if (result.WinnerSide != BattleSide.SideB)
                 throw new InvalidOperationException(
-                    "Smoke Defeat: outcome should be Defeat. Got: " + result.Outcome);
-            if (result.EndReason != BattleEndReason.PlayerBaseDestroyed)
+                    "Smoke SideBVictory: WinnerSide should be SideB. Got: " + result.WinnerSide);
+            if (result.EndReason != BattleEndReason.SideABaseDestroyed)
                 throw new InvalidOperationException(
-                    "Smoke Defeat: end reason should be PlayerBaseDestroyed. Got: " + result.EndReason);
+                    "Smoke SideBVictory: EndReason should be SideABaseDestroyed. Got: " + result.EndReason);
             if (result.ClearTimeTick != 1)
                 throw new InvalidOperationException(
-                    "Smoke Defeat: should end at tick 1. Got: " + result.ClearTimeTick);
-            if (result.PlayerBaseHpRatio != Fp.Zero)
+                    "Smoke SideBVictory: should end at tick 1. Got: " + result.ClearTimeTick);
+            if (result.SideABaseHpRatio != Fp.Zero)
                 throw new InvalidOperationException(
-                    "Smoke Defeat: player base hp ratio should be 0.0. Got: " + result.PlayerBaseHpRatio);
-            if (result.EnemyBaseHpRatio != Fp.One)
+                    "Smoke SideBVictory: SideA base hp ratio should be 0.0. Got: " + result.SideABaseHpRatio);
+            if (result.SideBBaseHpRatio != Fp.One)
                 throw new InvalidOperationException(
-                    "Smoke Defeat: enemy base hp ratio should be 1.0. Got: " + result.EnemyBaseHpRatio);
+                    "Smoke SideBVictory: SideB base hp ratio should be 1.0. Got: " + result.SideBBaseHpRatio);
         }
 
-        // smoke-3. Timeout scenario: no commands, 3 ticks, equal HP → Defeat.
-        private static void Smoke_TimeoutDefeat_ProducesExpectedResult()
+        private static void Smoke_TimeoutSideBTiebreak_ProducesExpectedResult()
         {
-            var (cfg, initial, commands) = SmokeScenarios.TimeoutDefeat();
+            var (cfg, initial, commands) = SmokeScenarios.TimeoutSideBTiebreak();
             BattleResult result = SmokeScenarios.RunToCompletion(cfg, initial, commands);
 
-            if (result.Outcome != BattleOutcome.Defeat)
+            if (result.WinnerSide != BattleSide.SideB)
                 throw new InvalidOperationException(
-                    "Smoke Timeout: outcome should be Defeat. Got: " + result.Outcome);
+                    "Smoke TimeoutTiebreak: WinnerSide should be SideB. Got: " + result.WinnerSide);
             if (result.EndReason != BattleEndReason.TimeOut)
                 throw new InvalidOperationException(
-                    "Smoke Timeout: end reason should be TimeOut. Got: " + result.EndReason);
+                    "Smoke TimeoutTiebreak: EndReason should be TimeOut. Got: " + result.EndReason);
             if (result.ClearTimeTick != 3)
                 throw new InvalidOperationException(
-                    "Smoke Timeout: should end at tick 3. Got: " + result.ClearTimeTick);
-            if (result.PlayerBaseHpRatio != Fp.One)
+                    "Smoke TimeoutTiebreak: should end at tick 3. Got: " + result.ClearTimeTick);
+            if (result.SideABaseHpRatio != Fp.One)
                 throw new InvalidOperationException(
-                    "Smoke Timeout: player base hp ratio should be 1.0. Got: " + result.PlayerBaseHpRatio);
-            if (result.EnemyBaseHpRatio != Fp.One)
+                    "Smoke TimeoutTiebreak: SideA base hp ratio should be 1.0. Got: " + result.SideABaseHpRatio);
+            if (result.SideBBaseHpRatio != Fp.One)
                 throw new InvalidOperationException(
-                    "Smoke Timeout: enemy base hp ratio should be 1.0. Got: " + result.EnemyBaseHpRatio);
+                    "Smoke TimeoutTiebreak: SideB base hp ratio should be 1.0. Got: " + result.SideBBaseHpRatio);
         }
 
-        // smoke-4. Running the victory scenario twice produces identical results.
-        private static void Smoke_PlayerVictory_IsDeterministicAcrossRepeatedRuns()
+        private static void Smoke_SideAVictory_IsDeterministicAcrossRepeatedRuns()
         {
-            var (cfgA, initialA, commandsA) = SmokeScenarios.PlayerVictory();
-            var (cfgB, initialB, commandsB) = SmokeScenarios.PlayerVictory();
+            var (cfgA, initialA, commandsA) = SmokeScenarios.SideAVictory();
+            var (cfgB, initialB, commandsB) = SmokeScenarios.SideAVictory();
 
             BattleResult ra = SmokeScenarios.RunToCompletion(cfgA, initialA, commandsA);
             BattleResult rb = SmokeScenarios.RunToCompletion(cfgB, initialB, commandsB);
 
-            if (ra.Outcome != rb.Outcome)
-                throw new InvalidOperationException("Smoke Determinism: outcome mismatch.");
+            if (ra.WinnerSide != rb.WinnerSide)
+                throw new InvalidOperationException("Smoke Determinism: WinnerSide mismatch.");
             if (ra.EndReason != rb.EndReason)
-                throw new InvalidOperationException("Smoke Determinism: end reason mismatch.");
+                throw new InvalidOperationException("Smoke Determinism: EndReason mismatch.");
             if (ra.ClearTimeTick != rb.ClearTimeTick)
-                throw new InvalidOperationException("Smoke Determinism: clear_time_tick mismatch.");
-            if (ra.PlayerBaseHpRatio != rb.PlayerBaseHpRatio)
-                throw new InvalidOperationException("Smoke Determinism: player_base_hp_ratio mismatch.");
-            if (ra.EnemyBaseHpRatio != rb.EnemyBaseHpRatio)
-                throw new InvalidOperationException("Smoke Determinism: enemy_base_hp_ratio mismatch.");
+                throw new InvalidOperationException("Smoke Determinism: ClearTimeTick mismatch.");
+            if (ra.SideABaseHpRatio != rb.SideABaseHpRatio)
+                throw new InvalidOperationException("Smoke Determinism: SideABaseHpRatio mismatch.");
+            if (ra.SideBBaseHpRatio != rb.SideBBaseHpRatio)
+                throw new InvalidOperationException("Smoke Determinism: SideBBaseHpRatio mismatch.");
         }
 
-        // v2-15. Same config + initial + command sequence produces same BattleResult (determinism).
+        // v2-19. Same config + initial + command sequence produces same BattleResult (determinism).
         private static void Determinism_SameSetupProducesSameResult()
         {
             long laneLen = 2_000L;
@@ -854,30 +1080,43 @@ namespace BattleSim.Core.Tests.Simulation
                 Fp.FromInt(10), Fp.FromInt(100), Fp.Zero,
                 maxBattleTick: 10,
                 laneLengthMilli: laneLen,
-                enemySpawns: new EnemySpawnDefinition[]
-                {
-                    new EnemySpawnDefinition(1, "lane_ground", Fp.FromInt(30), Fp.FromInt(5), 500L, 200L),
-                });
-            BattleInitialState initial = MinimalInitialState();
+                sideBInitialEnergy: Fp.FromInt(10));
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                new SlotDefinition(
+                    0, "p", "d", Fp.FromInt(10), 100,
+                    Fp.FromInt(100), Fp.FromInt(10), 1_000L, 200L,
+                    Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
+            });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                new SlotDefinition(
+                    0, "pb", "db", Fp.FromInt(10), 100,
+                    Fp.FromInt(30), Fp.FromInt(5), 500L, 200L,
+                    Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
 
             BattleSimulator simA = new BattleSimulator(cfg, initial);
             BattleSimulator simB = new BattleSimulator(cfg, initial);
 
-            simA.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground"));
-            simB.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground"));
+            simA.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            simB.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            simA.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+            simB.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
 
             for (int i = 0; i < 10 && !simA.IsTerminated; i++) simA.AdvanceTick();
             for (int i = 0; i < 10 && !simB.IsTerminated; i++) simB.AdvanceTick();
 
             if (simA.IsTerminated != simB.IsTerminated)
                 throw new InvalidOperationException("Determinism: termination state mismatch.");
-            if (!simA.IsTerminated) return; // neither terminated, state comparison would also suffice
+            if (!simA.IsTerminated) return;
 
             BattleResult ra = simA.GetResult();
             BattleResult rb = simB.GetResult();
-            if (ra.Outcome != rb.Outcome)
+            if (ra.WinnerSide != rb.WinnerSide)
                 throw new InvalidOperationException(
-                    "Determinism: outcome mismatch. A=" + ra.Outcome + " B=" + rb.Outcome);
+                    "Determinism: WinnerSide mismatch. A=" + ra.WinnerSide + " B=" + rb.WinnerSide);
             if (ra.EndReason != rb.EndReason)
                 throw new InvalidOperationException("Determinism: EndReason mismatch.");
             if (ra.ClearTimeTick != rb.ClearTimeTick)

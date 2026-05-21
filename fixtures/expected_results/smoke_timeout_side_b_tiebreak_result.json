@@ -1,0 +1,7 @@
+{
+  "winner_side": "side_b",
+  "end_reason": "time_out",
+  "clear_time_tick": 3,
+  "side_a_base_hp_ratio": "1.0000",
+  "side_b_base_hp_ratio": "1.0000"
+}

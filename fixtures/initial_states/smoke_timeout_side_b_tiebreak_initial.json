@@ -1,0 +1,50 @@
+{
+  "stage_id": "smoke_timeout_side_b_tiebreak",
+  "rng_seed": 3,
+  "side_a": {
+    "slots": [
+      {
+        "slot_index": 0,
+        "pilot_id": "pilot_a",
+        "drone_squad_id": "drone_a",
+        "energy_cost": "20.0000",
+        "cooldown_tick": 5,
+        "drone": {
+          "hp": "100.0000",
+          "attack": "10.0000",
+          "range_milli": 500,
+          "speed_milli_per_tick": 500
+        },
+        "pilot": {
+          "hp": "200.0000",
+          "attack": "20.0000",
+          "range_milli": 1000,
+          "speed_milli_per_tick": 300
+        }
+      }
+    ]
+  },
+  "side_b": {
+    "slots": [
+      {
+        "slot_index": 0,
+        "pilot_id": "pilot_b",
+        "drone_squad_id": "drone_b",
+        "energy_cost": "20.0000",
+        "cooldown_tick": 5,
+        "drone": {
+          "hp": "100.0000",
+          "attack": "10.0000",
+          "range_milli": 500,
+          "speed_milli_per_tick": 500
+        },
+        "pilot": {
+          "hp": "200.0000",
+          "attack": "20.0000",
+          "range_milli": 1000,
+          "speed_milli_per_tick": 300
+        }
+      }
+    ]
+  }
+}

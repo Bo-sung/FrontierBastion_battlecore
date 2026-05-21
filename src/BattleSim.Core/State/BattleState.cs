@@ -11,32 +11,41 @@ namespace BattleSim.Core.State
     public sealed class BattleState
     {
         public int CurrentTick { get; private set; }
-        public Fp PlayerBaseHp { get; private set; }
-        public Fp EnemyBaseHp { get; private set; }
-        public Fp PlayerEnergy { get; private set; }
         public bool IsTerminated { get; private set; }
         public BattleEndReason EndReason { get; private set; }
-        public IReadOnlyList<SlotState> Slots { get; private set; }
+
+        /// <summary>Index 0 = SideA, Index 1 = SideB.</summary>
+        public IReadOnlyList<BattleSideState> Sides { get; private set; }
         public IReadOnlyList<LaneState> Lanes { get; private set; }
 
         public BattleState(
             int currentTick,
-            Fp playerBaseHp,
-            Fp enemyBaseHp,
-            Fp playerEnergy,
             bool isTerminated,
             BattleEndReason endReason,
-            IReadOnlyList<SlotState> slots,
+            IReadOnlyList<BattleSideState> sides,
             IReadOnlyList<LaneState> lanes)
         {
             CurrentTick = currentTick;
-            PlayerBaseHp = playerBaseHp;
-            EnemyBaseHp = enemyBaseHp;
-            PlayerEnergy = playerEnergy;
             IsTerminated = isTerminated;
             EndReason = endReason;
-            Slots = slots;
+            Sides = sides;
             Lanes = lanes;
+        }
+    }
+
+    public sealed class BattleSideState
+    {
+        public BattleSide Side { get; private set; }
+        public Fp BaseHp { get; private set; }
+        public Fp Energy { get; private set; }
+        public IReadOnlyList<SlotState> Slots { get; private set; }
+
+        public BattleSideState(BattleSide side, Fp baseHp, Fp energy, IReadOnlyList<SlotState> slots)
+        {
+            Side = side;
+            BaseHp = baseHp;
+            Energy = energy;
+            Slots = slots;
         }
     }
 
@@ -74,15 +83,15 @@ namespace BattleSim.Core.State
     public sealed class BattleEntity
     {
         public string EntityId { get; private set; }
-        public OwnerSide OwnerSide { get; private set; }
+        public BattleSide Side { get; private set; }
         public Fp Hp { get; private set; }
         /// <summary>Position in milliunits (see <see cref="Milliunits"/>).</summary>
         public long PositionMilli { get; private set; }
 
-        public BattleEntity(string entityId, OwnerSide ownerSide, Fp hp, long positionMilli)
+        public BattleEntity(string entityId, BattleSide side, Fp hp, long positionMilli)
         {
             EntityId = entityId;
-            OwnerSide = ownerSide;
+            Side = side;
             Hp = hp;
             PositionMilli = positionMilli;
         }

@@ -10,24 +10,26 @@ using BattleSim.Core.State;
 namespace BattleSim.Core.Simulation
 {
     /// <summary>
-    /// Deterministic battle simulator — v0.2.
+    /// Deterministic battle simulator — v0.3 (SideA/SideB symmetric).
     ///
     /// Position convention (per lane):
-    ///   0                       == player base wall
-    ///   LaneLengthMilli         == enemy  base wall
+    ///   0               == SideA base wall
+    ///   LaneLengthMilli == SideB base wall
     ///
-    /// Player entities spawn at 0 and advance toward LaneLengthMilli.
-    /// Enemy  entities spawn at LaneLengthMilli and advance toward 0.
+    /// SideA entities spawn at 0 and advance toward LaneLengthMilli.
+    /// SideB entities spawn at LaneLengthMilli and advance toward 0.
+    ///
+    /// PvE interpretation: SideA = local player, SideB = AI controller.
+    /// PvP: both sides driven by external command streams via SubmitCommand.
     ///
     /// Tick order inside AdvanceTick():
     ///   1. Apply pending commands (entity create / remove)
-    ///   2. Energy regen (clamped)
-    ///   3. Cooldown decay
+    ///   2. Energy regen for both sides (clamped)
+    ///   3. Cooldown decay for both sides
     ///   4. Increment CurrentTick
-    ///   5. Spawn enemies from schedule
-    ///   6. Combat phase (attack or move; base damage on reach)
-    ///   7. Remove dead entities; update pilot KO state
-    ///   8. Check termination: Victory → Defeat → TimeOut (first match wins)
+    ///   5. Combat phase (attack or move; base damage on reach)
+    ///   6. Remove dead entities; update pilot KO state
+    ///   7. Check termination: SideBBaseDestroyed → SideABaseDestroyed → TimeOut
     /// </summary>
     public sealed class BattleSimulator
     {
@@ -40,11 +42,9 @@ namespace BattleSim.Core.Simulation
         private int _currentTick;
         private bool _isTerminated;
         private BattleEndReason _endReason;
-        private Fp _playerBaseHp;
-        private Fp _enemyBaseHp;
-        private Fp _playerEnergy;
+        private readonly RuntimeSideState _sideA;
+        private readonly RuntimeSideState _sideB;
         private readonly List<BattleCommand> _pendingCommands;
-        private readonly RuntimeSlotState[] _slotStates;
         private BattleResult? _result;
 
         // Entity store: ordered by NumericId (creation order) for determinism.
@@ -61,16 +61,29 @@ namespace BattleSim.Core.Simulation
             _currentTick = 0;
             _isTerminated = false;
             _endReason = BattleEndReason.None;
-            _playerBaseHp = config.PlayerBaseInitialHp;
-            _enemyBaseHp = config.EnemyBaseInitialHp;
-            _playerEnergy = config.InitialEnergy;
             _pendingCommands = new List<BattleCommand>();
             _entities = new List<RuntimeEntity>();
             _nextEntityId = 1;
 
-            _slotStates = new RuntimeSlotState[initial.Slots.Length];
-            for (int i = 0; i < initial.Slots.Length; i++)
-                _slotStates[i] = new RuntimeSlotState { SlotIndex = initial.Slots[i].SlotIndex };
+            _sideA = BuildSideState(config.SideA, initial.SideA);
+            _sideB = BuildSideState(config.SideB, initial.SideB);
+        }
+
+        private static RuntimeSideState BuildSideState(BattleSideConfig cfg, BattleSideInitialState init)
+        {
+            RuntimeSlotState[] slots = new RuntimeSlotState[init.Slots.Length];
+            for (int i = 0; i < init.Slots.Length; i++)
+                slots[i] = new RuntimeSlotState { SlotIndex = init.Slots[i].SlotIndex };
+            return new RuntimeSideState
+            {
+                Side               = cfg.Side,
+                BaseHp             = cfg.BaseInitialHp,
+                InitialBaseHp      = cfg.BaseInitialHp,
+                Energy             = cfg.InitialEnergy,
+                MaxEnergy          = cfg.MaxEnergy,
+                EnergyRegenPerTick = cfg.EnergyRegenPerTick,
+                SlotStates         = slots,
+            };
         }
 
         public int CurrentTick { get { return _currentTick; } }
@@ -79,6 +92,7 @@ namespace BattleSim.Core.Simulation
         /// <summary>
         /// Queue a command for the current tick.
         /// The command's <see cref="BattleCommand.Tick"/> must equal <see cref="CurrentTick"/>.
+        /// Both SideA and SideB may submit commands in the same tick.
         /// </summary>
         public void SubmitCommand(BattleCommand command)
         {
@@ -102,60 +116,74 @@ namespace BattleSim.Core.Simulation
                 ApplyCommand(cmd);
             _pendingCommands.Clear();
 
-            // 2. Energy regen, clamped at MaxEnergy.
-            Fp regenned = _playerEnergy + _config.EnergyRegenPerTick;
-            _playerEnergy = regenned > _config.MaxEnergy ? _config.MaxEnergy : regenned;
+            // 2. Energy regen for both sides, clamped at MaxEnergy.
+            RegenEnergy(_sideA);
+            RegenEnergy(_sideB);
 
             // 3. Decay slot cooldowns toward zero.
-            for (int i = 0; i < _slotStates.Length; i++)
-            {
-                RuntimeSlotState s = _slotStates[i];
-                if (s.DroneCooldownTick > 0) s.DroneCooldownTick--;
-                if (s.PilotCooldownTick > 0) s.PilotCooldownTick--;
-            }
+            DecayCooldowns(_sideA);
+            DecayCooldowns(_sideB);
 
             // 4. Advance tick.
             _currentTick++;
 
-            // 5. Spawn enemies from schedule.
-            SpawnEnemies();
-
-            // 6. Combat phase (movement + attacks + base damage).
+            // 5. Combat phase (movement + attacks + base damage).
             RunCombat();
 
-            // 7. Remove dead entities; handle pilot knockouts.
+            // 6. Remove dead entities; handle pilot knockouts.
             RemoveDeadEntities();
 
-            // 8. Check termination.
+            // 7. Check termination.
             CheckTermination();
+        }
+
+        private static void RegenEnergy(RuntimeSideState side)
+        {
+            Fp regenned = side.Energy + side.EnergyRegenPerTick;
+            side.Energy = regenned > side.MaxEnergy ? side.MaxEnergy : regenned;
+        }
+
+        private static void DecayCooldowns(RuntimeSideState side)
+        {
+            foreach (RuntimeSlotState s in side.SlotStates)
+            {
+                if (s.DroneCooldownTick > 0) s.DroneCooldownTick--;
+                if (s.PilotCooldownTick > 0) s.PilotCooldownTick--;
+            }
         }
 
         public BattleState GetState()
         {
-            SlotState[] slots = new SlotState[_slotStates.Length];
-            for (int i = 0; i < _slotStates.Length; i++)
+            BattleSideState[] sides = new BattleSideState[]
             {
-                RuntimeSlotState s = _slotStates[i];
-                slots[i] = new SlotState(s.SlotIndex, s.IsPilotDeployed, s.IsPilotKnockedOut,
-                    s.DroneCooldownTick, s.PilotCooldownTick);
-            }
+                BuildSideSnapshot(_sideA),
+                BuildSideSnapshot(_sideB),
+            };
 
-            // Build lane snapshots from living entities (dead ones already removed after each tick).
             LaneState[] lanes = new LaneState[_config.Lanes.Length];
             for (int i = 0; i < _config.Lanes.Length; i++)
             {
                 string laneId = _config.Lanes[i].LaneId;
                 List<BattleEntity> snapshot = new List<BattleEntity>();
                 foreach (RuntimeEntity e in _entities)
-                {
                     if (e.LaneId == laneId)
                         snapshot.Add(new BattleEntity(e.EntityId, e.Owner, e.Hp, e.PositionMilli));
-                }
                 lanes[i] = new LaneState(laneId, snapshot);
             }
 
-            return new BattleState(_currentTick, _playerBaseHp, _enemyBaseHp, _playerEnergy,
-                _isTerminated, _endReason, slots, lanes);
+            return new BattleState(_currentTick, _isTerminated, _endReason, sides, lanes);
+        }
+
+        private static BattleSideState BuildSideSnapshot(RuntimeSideState side)
+        {
+            SlotState[] slots = new SlotState[side.SlotStates.Length];
+            for (int i = 0; i < side.SlotStates.Length; i++)
+            {
+                RuntimeSlotState s = side.SlotStates[i];
+                slots[i] = new SlotState(s.SlotIndex, s.IsPilotDeployed, s.IsPilotKnockedOut,
+                    s.DroneCooldownTick, s.PilotCooldownTick);
+            }
+            return new BattleSideState(side.Side, side.BaseHp, side.Energy, slots);
         }
 
         public BattleResult GetResult()
@@ -184,11 +212,12 @@ namespace BattleSim.Core.Simulation
             if (!LaneExists(cmd.LaneId))
                 throw new ArgumentException("Lane not found: " + cmd.LaneId, "command");
 
-            RuntimeSlotState? slot = FindSlotState(cmd.SlotIndex);
+            RuntimeSideState sideState = GetSideState(cmd.Side);
+            RuntimeSlotState? slot = FindSlotState(sideState, cmd.SlotIndex);
             if (slot == null)
                 throw new ArgumentException("Slot index not found: " + cmd.SlotIndex, "command");
 
-            SlotDefinition? def = FindSlotDefinition(cmd.SlotIndex);
+            SlotDefinition? def = FindSlotDefinition(cmd.Side, cmd.SlotIndex);
             if (def == null)
                 throw new ArgumentException("Slot definition not found: " + cmd.SlotIndex, "command");
 
@@ -198,17 +227,17 @@ namespace BattleSim.Core.Simulation
             if (slot.IsPilotDeployed)
                 throw new InvalidOperationException(
                     "Slot " + cmd.SlotIndex + " pilot is deployed; cannot spawn drone squad.");
-            if (_playerEnergy < def.EnergyCost)
+            if (sideState.Energy < def.EnergyCost)
                 throw new InvalidOperationException(
-                    "Insufficient energy: need " + def.EnergyCost + ", have " + _playerEnergy + ".");
+                    "Insufficient energy: need " + def.EnergyCost + ", have " + sideState.Energy + ".");
 
-            _playerEnergy = _playerEnergy - def.EnergyCost;
+            sideState.Energy = sideState.Energy - def.EnergyCost;
             slot.DroneCooldownTick = def.CooldownTick;
 
-            _entities.Add(CreateEntity(
-                cmd.LaneId, OwnerSide.Player,
+            long startPos = cmd.Side == BattleSide.SideA ? 0L : GetLaneLengthMilli(cmd.LaneId);
+            _entities.Add(CreateEntity(cmd.LaneId, cmd.Side,
                 def.DroneHp, def.DroneAttack, def.DroneRangeMilli, def.DroneSpeedMilliPerTick,
-                startPosition: 0L, slotIndex: -1));
+                startPosition: startPos, slotIndex: -1));
         }
 
         private void ApplyDeployPilot(BattleCommand cmd)
@@ -216,11 +245,12 @@ namespace BattleSim.Core.Simulation
             if (!LaneExists(cmd.LaneId))
                 throw new ArgumentException("Lane not found: " + cmd.LaneId, "command");
 
-            RuntimeSlotState? slot = FindSlotState(cmd.SlotIndex);
+            RuntimeSideState sideState = GetSideState(cmd.Side);
+            RuntimeSlotState? slot = FindSlotState(sideState, cmd.SlotIndex);
             if (slot == null)
                 throw new ArgumentException("Slot index not found: " + cmd.SlotIndex, "command");
 
-            SlotDefinition? def = FindSlotDefinition(cmd.SlotIndex);
+            SlotDefinition? def = FindSlotDefinition(cmd.Side, cmd.SlotIndex);
             if (def == null)
                 throw new ArgumentException("Slot definition not found: " + cmd.SlotIndex, "command");
 
@@ -231,10 +261,10 @@ namespace BattleSim.Core.Simulation
                 throw new InvalidOperationException(
                     "Slot " + cmd.SlotIndex + " pilot is knocked out and cannot deploy.");
 
-            RuntimeEntity pilot = CreateEntity(
-                cmd.LaneId, OwnerSide.Player,
+            long startPos = cmd.Side == BattleSide.SideA ? 0L : GetLaneLengthMilli(cmd.LaneId);
+            RuntimeEntity pilot = CreateEntity(cmd.LaneId, cmd.Side,
                 def.PilotHp, def.PilotAttack, def.PilotRangeMilli, def.PilotSpeedMilliPerTick,
-                startPosition: 0L, slotIndex: cmd.SlotIndex);
+                startPosition: startPos, slotIndex: cmd.SlotIndex);
             _entities.Add(pilot);
 
             slot.IsPilotDeployed = true;
@@ -243,7 +273,8 @@ namespace BattleSim.Core.Simulation
 
         private void ApplyRecallPilot(BattleCommand cmd)
         {
-            RuntimeSlotState? slot = FindSlotState(cmd.SlotIndex);
+            RuntimeSideState sideState = GetSideState(cmd.Side);
+            RuntimeSlotState? slot = FindSlotState(sideState, cmd.SlotIndex);
             if (slot == null)
                 throw new ArgumentException("Slot index not found: " + cmd.SlotIndex, "command");
             if (!slot.IsPilotDeployed)
@@ -261,21 +292,6 @@ namespace BattleSim.Core.Simulation
 
         // ------------------------------------------------------------------ per-tick phases
 
-        private void SpawnEnemies()
-        {
-            foreach (EnemySpawnDefinition def in _config.EnemySpawnSchedule)
-            {
-                if (def.SpawnTick != _currentTick) continue;
-                if (!LaneExists(def.LaneId)) continue;
-
-                long laneLen = GetLaneLengthMilli(def.LaneId);
-                _entities.Add(CreateEntity(
-                    def.LaneId, OwnerSide.Enemy,
-                    def.Hp, def.Attack, def.RangeMilli, def.SpeedMilliPerTick,
-                    startPosition: laneLen, slotIndex: -1));
-            }
-        }
-
         private void RunCombat()
         {
             foreach (LaneDefinition laneDef in _config.Lanes)
@@ -283,7 +299,7 @@ namespace BattleSim.Core.Simulation
                 string laneId = laneDef.LaneId;
                 long laneLen = laneDef.LaneLengthMilli;
 
-                // Snapshot lane entities in creation order (NumericId order).
+                // Snapshot lane entities in creation order (NumericId order) for determinism.
                 List<RuntimeEntity> laneEntities = new List<RuntimeEntity>();
                 foreach (RuntimeEntity e in _entities)
                     if (e.LaneId == laneId)
@@ -293,7 +309,7 @@ namespace BattleSim.Core.Simulation
                 {
                     if (entity.Hp <= Fp.Zero) continue; // died earlier this tick
 
-                    RuntimeEntity? target = FindNearestEnemy(entity, laneEntities);
+                    RuntimeEntity? target = FindNearestOpponent(entity, laneEntities);
                     if (target != null)
                     {
                         // Attack: deal damage, no movement.
@@ -301,23 +317,23 @@ namespace BattleSim.Core.Simulation
                     }
                     else
                     {
-                        // Move toward the opposing base, deal damage if base reached.
-                        if (entity.Owner == OwnerSide.Player)
+                        // Move toward the opposing base; deal damage if base wall reached.
+                        if (entity.Owner == BattleSide.SideA)
                         {
                             entity.PositionMilli += entity.SpeedMilliPerTick;
                             if (entity.PositionMilli >= laneLen)
                             {
                                 entity.PositionMilli = laneLen;
-                                _enemyBaseHp = _enemyBaseHp - entity.Attack;
+                                _sideB.BaseHp = _sideB.BaseHp - entity.Attack;
                             }
                         }
-                        else
+                        else // SideB
                         {
                             entity.PositionMilli -= entity.SpeedMilliPerTick;
                             if (entity.PositionMilli <= 0)
                             {
                                 entity.PositionMilli = 0;
-                                _playerBaseHp = _playerBaseHp - entity.Attack;
+                                _sideA.BaseHp = _sideA.BaseHp - entity.Attack;
                             }
                         }
                     }
@@ -335,7 +351,8 @@ namespace BattleSim.Core.Simulation
                 // If this is a deployed pilot, mark slot as knocked out.
                 if (e.SlotIndex >= 0)
                 {
-                    RuntimeSlotState? slot = FindSlotState(e.SlotIndex);
+                    RuntimeSideState sideState = GetSideState(e.Owner);
+                    RuntimeSlotState? slot = FindSlotState(sideState, e.SlotIndex);
                     if (slot != null && slot.PilotEntity == e)
                     {
                         slot.IsPilotDeployed = false;
@@ -354,45 +371,46 @@ namespace BattleSim.Core.Simulation
         {
             if (_isTerminated) return;
 
-            if (_enemyBaseHp <= Fp.Zero)
+            if (_sideB.BaseHp <= Fp.Zero)
             {
-                Fp playerRatio = _config.PlayerBaseInitialHp > Fp.Zero
-                    ? (_playerBaseHp < Fp.Zero ? Fp.Zero : _playerBaseHp) / _config.PlayerBaseInitialHp
+                Fp sideARatio = _sideA.InitialBaseHp > Fp.Zero
+                    ? (_sideA.BaseHp < Fp.Zero ? Fp.Zero : _sideA.BaseHp) / _sideA.InitialBaseHp
                     : Fp.Zero;
-                _endReason = BattleEndReason.EnemyBaseDestroyed;
+                _endReason = BattleEndReason.SideBBaseDestroyed;
                 _isTerminated = true;
-                _result = new BattleResult(BattleOutcome.Victory, BattleEndReason.EnemyBaseDestroyed,
-                    _currentTick, playerRatio, Fp.Zero);
+                _result = new BattleResult(BattleSide.SideA, BattleEndReason.SideBBaseDestroyed,
+                    _currentTick, sideARatio, Fp.Zero);
                 return;
             }
 
-            if (_playerBaseHp <= Fp.Zero)
+            if (_sideA.BaseHp <= Fp.Zero)
             {
-                Fp enemyRatio = _config.EnemyBaseInitialHp > Fp.Zero
-                    ? (_enemyBaseHp < Fp.Zero ? Fp.Zero : _enemyBaseHp) / _config.EnemyBaseInitialHp
+                Fp sideBRatio = _sideB.InitialBaseHp > Fp.Zero
+                    ? (_sideB.BaseHp < Fp.Zero ? Fp.Zero : _sideB.BaseHp) / _sideB.InitialBaseHp
                     : Fp.Zero;
-                _endReason = BattleEndReason.PlayerBaseDestroyed;
+                _endReason = BattleEndReason.SideABaseDestroyed;
                 _isTerminated = true;
-                _result = new BattleResult(BattleOutcome.Defeat, BattleEndReason.PlayerBaseDestroyed,
-                    _currentTick, Fp.Zero, enemyRatio);
+                _result = new BattleResult(BattleSide.SideB, BattleEndReason.SideABaseDestroyed,
+                    _currentTick, Fp.Zero, sideBRatio);
                 return;
             }
 
             if (_currentTick >= _config.MaxBattleTick)
             {
-                Fp playerRatio = _config.PlayerBaseInitialHp > Fp.Zero
-                    ? _playerBaseHp / _config.PlayerBaseInitialHp : Fp.Zero;
-                Fp enemyRatio = _config.EnemyBaseInitialHp > Fp.Zero
-                    ? _enemyBaseHp / _config.EnemyBaseInitialHp : Fp.Zero;
+                Fp sideARatio = _sideA.InitialBaseHp > Fp.Zero
+                    ? _sideA.BaseHp / _sideA.InitialBaseHp : Fp.Zero;
+                Fp sideBRatio = _sideB.InitialBaseHp > Fp.Zero
+                    ? _sideB.BaseHp / _sideB.InitialBaseHp : Fp.Zero;
                 _endReason = BattleEndReason.TimeOut;
                 _isTerminated = true;
-                _result = BattleResult.FromTimeOut(_currentTick, playerRatio, enemyRatio);
+                _result = BattleResult.FromTimeOut(
+                    _currentTick, sideARatio, sideBRatio, _config.TimeOutTieWinnerSide);
             }
         }
 
         // ------------------------------------------------------------------ combat helpers
 
-        private RuntimeEntity? FindNearestEnemy(RuntimeEntity attacker, List<RuntimeEntity> laneEntities)
+        private RuntimeEntity? FindNearestOpponent(RuntimeEntity attacker, List<RuntimeEntity> laneEntities)
         {
             RuntimeEntity? nearest = null;
             long nearestDist = long.MaxValue;
@@ -418,27 +436,34 @@ namespace BattleSim.Core.Simulation
         }
 
         private RuntimeEntity CreateEntity(
-            string laneId, OwnerSide owner,
+            string laneId, BattleSide owner,
             Fp hp, Fp attack, long rangeMilli, long speedMilliPerTick,
             long startPosition, int slotIndex)
         {
             int id = _nextEntityId++;
             return new RuntimeEntity
             {
-                NumericId          = id,
-                EntityId           = "e_" + id,
-                LaneId             = laneId,
-                Owner              = owner,
-                Hp                 = hp,
-                Attack             = attack,
-                RangeMilli         = rangeMilli,
-                SpeedMilliPerTick  = speedMilliPerTick,
-                PositionMilli      = startPosition,
-                SlotIndex          = slotIndex,
+                NumericId         = id,
+                EntityId          = "e_" + id,
+                LaneId            = laneId,
+                Owner             = owner,
+                Hp                = hp,
+                Attack            = attack,
+                RangeMilli        = rangeMilli,
+                SpeedMilliPerTick = speedMilliPerTick,
+                PositionMilli     = startPosition,
+                SlotIndex         = slotIndex,
             };
         }
 
         // ------------------------------------------------------------------ lookup helpers
+
+        private RuntimeSideState GetSideState(BattleSide side)
+        {
+            if (side == BattleSide.SideA) return _sideA;
+            if (side == BattleSide.SideB) return _sideB;
+            throw new ArgumentException("Invalid side: " + side, "side");
+        }
 
         private bool LaneExists(string laneId)
         {
@@ -454,21 +479,33 @@ namespace BattleSim.Core.Simulation
             return 10_000L; // unreachable when called after LaneExists
         }
 
-        private RuntimeSlotState? FindSlotState(int slotIndex)
+        private static RuntimeSlotState? FindSlotState(RuntimeSideState side, int slotIndex)
         {
-            for (int i = 0; i < _slotStates.Length; i++)
-                if (_slotStates[i].SlotIndex == slotIndex) return _slotStates[i];
+            foreach (RuntimeSlotState s in side.SlotStates)
+                if (s.SlotIndex == slotIndex) return s;
             return null;
         }
 
-        private SlotDefinition? FindSlotDefinition(int slotIndex)
+        private SlotDefinition? FindSlotDefinition(BattleSide side, int slotIndex)
         {
-            foreach (SlotDefinition def in _initial.Slots)
+            BattleSideInitialState sideInit = side == BattleSide.SideA ? _initial.SideA : _initial.SideB;
+            foreach (SlotDefinition def in sideInit.Slots)
                 if (def.SlotIndex == slotIndex) return def;
             return null;
         }
 
         // ------------------------------------------------------------------ inner types
+
+        private sealed class RuntimeSideState
+        {
+            public BattleSide Side;
+            public Fp BaseHp;
+            public Fp InitialBaseHp;
+            public Fp Energy;
+            public Fp MaxEnergy;
+            public Fp EnergyRegenPerTick;
+            public RuntimeSlotState[] SlotStates = new RuntimeSlotState[0];
+        }
 
         private sealed class RuntimeSlotState
         {
@@ -485,13 +522,13 @@ namespace BattleSim.Core.Simulation
             public int NumericId;
             public string EntityId = "";
             public string LaneId = "";
-            public OwnerSide Owner;
+            public BattleSide Owner;
             public Fp Hp;
             public Fp Attack;
             public long RangeMilli;
             public long SpeedMilliPerTick;
             public long PositionMilli;
-            /// <summary>Pilot slot index, or -1 for drones / enemy entities.</summary>
+            /// <summary>Pilot slot index, or -1 for drone entities.</summary>
             public int SlotIndex;
         }
     }

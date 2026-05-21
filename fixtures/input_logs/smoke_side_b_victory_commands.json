@@ -1,0 +1,9 @@
+[
+  {
+    "tick": 0,
+    "side": "side_b",
+    "command_type": "spawn_drone_squad",
+    "slot_index": 0,
+    "lane_id": "lane_ground"
+  }
+]
