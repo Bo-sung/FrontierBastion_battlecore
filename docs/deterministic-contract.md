@@ -9,3 +9,4 @@ ASP.NET server execution.
 - RNG algorithm is undecided and must be selected before gameplay logic depends on randomness.
 - Platform time, floating-point physics, Unity random APIs, and server-local random APIs are prohibited for battle decisions.
 - Fixtures under `fixtures/` should become the regression source for identical input/output checks.
+- Base wall damage path bypasses both Defense subtraction and MinDamage clamp.
