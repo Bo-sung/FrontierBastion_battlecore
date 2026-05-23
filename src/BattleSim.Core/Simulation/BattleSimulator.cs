@@ -10,7 +10,7 @@ using BattleSim.Core.State;
 namespace BattleSim.Core.Simulation
 {
     /// <summary>
-    /// Deterministic battle simulator — v0.4 (SideA/SideB symmetric).
+    /// Deterministic battle simulator — v0.5 with projectile combat.
     ///
     /// Position convention (per lane):
     ///   0               == SideA base wall
@@ -27,9 +27,10 @@ namespace BattleSim.Core.Simulation
     ///   2. Energy regen for both sides (clamped)
     ///   3. Cooldown decay for both sides
     ///   4. Increment CurrentTick
-    ///   5. Combat phase (attack or move; base damage on reach)
-    ///   6. Remove dead entities; update pilot KO state
-    ///   7. Check termination: SideBBaseDestroyed → SideABaseDestroyed → TimeOut
+    ///   5. RunProjectiles()
+    ///   6. RunCombat()
+    ///   7. RemoveDeadEntities; update pilot KO state
+    ///   8. Check termination: SideBBaseDestroyed → SideABaseDestroyed → TimeOut
     /// </summary>
     public sealed class BattleSimulator
     {
@@ -51,6 +52,10 @@ namespace BattleSim.Core.Simulation
         private readonly List<RuntimeEntity> _entities;
         private int _nextEntityId;
 
+        // Projectile store: ordered by NumericId (creation order) for determinism.
+        private readonly List<RuntimeProjectile> _projectiles;
+        private int _nextProjectileId;
+
         public BattleSimulator(BattleConfigSnapshot config, BattleInitialState initial)
         {
             if (config == null) throw new ArgumentNullException("config");
@@ -64,6 +69,8 @@ namespace BattleSim.Core.Simulation
             _pendingCommands = new List<BattleCommand>();
             _entities = new List<RuntimeEntity>();
             _nextEntityId = 1;
+            _projectiles = new List<RuntimeProjectile>();
+            _nextProjectileId = 1;
 
             _sideA = BuildSideState(config.SideA, initial.SideA);
             _sideB = BuildSideState(config.SideB, initial.SideB);
@@ -127,13 +134,16 @@ namespace BattleSim.Core.Simulation
             // 4. Advance tick.
             _currentTick++;
 
-            // 5. Combat phase (movement + attacks + base damage).
+            // 5. Run Projectiles (New v0.5)
+            RunProjectiles();
+
+            // 6. Combat phase (movement + attacks + base damage).
             RunCombat();
 
-            // 6. Remove dead entities; handle pilot knockouts.
+            // 7. Remove dead entities; handle pilot knockouts.
             RemoveDeadEntities();
 
-            // 7. Check termination.
+            // 8. Check termination.
             CheckTermination();
         }
 
@@ -171,7 +181,16 @@ namespace BattleSim.Core.Simulation
                 lanes[i] = new LaneState(laneId, snapshot);
             }
 
-            return new BattleState(_currentTick, _isTerminated, _endReason, sides, lanes);
+            List<BattleProjectile> projSnapshots = new List<BattleProjectile>();
+            foreach (RuntimeProjectile p in _projectiles)
+            {
+                projSnapshots.Add(new BattleProjectile(
+                    p.ProjectileId, p.Owner, p.SourceLaneId, p.ProjectileLaneId,
+                    p.TargetLaneId, p.TargetEntityId, p.SourceProgressMilli,
+                    p.PositionMilli, p.ImpactProgressMilli, p.Damage, p.RemainingTtlTick));
+            }
+
+            return new BattleState(_currentTick, _isTerminated, _endReason, sides, lanes, projSnapshots);
         }
 
         private static BattleSideState BuildSideSnapshot(RuntimeSideState side)
@@ -237,6 +256,7 @@ namespace BattleSim.Core.Simulation
             long startPos = cmd.Side == BattleSide.SideA ? 0L : GetLaneLengthMilli(cmd.LaneId);
             _entities.Add(CreateEntity(cmd.LaneId, cmd.Side,
                 def.DroneHp, def.DroneAttack, def.DroneDefense, def.DroneRangeMilli, def.DroneSpeedMilliPerTick, def.DroneAttackPeriodTick,
+                def.DroneAttackKind, def.DroneProjectileSpeedMilliPerTick,
                 startPosition: startPos, slotIndex: -1));
         }
 
@@ -264,6 +284,7 @@ namespace BattleSim.Core.Simulation
             long startPos = cmd.Side == BattleSide.SideA ? 0L : GetLaneLengthMilli(cmd.LaneId);
             RuntimeEntity pilot = CreateEntity(cmd.LaneId, cmd.Side,
                 def.PilotHp, def.PilotAttack, def.PilotDefense, def.PilotRangeMilli, def.PilotSpeedMilliPerTick, def.PilotAttackPeriodTick,
+                def.PilotAttackKind, def.PilotProjectileSpeedMilliPerTick,
                 startPosition: startPos, slotIndex: cmd.SlotIndex);
             _entities.Add(pilot);
 
@@ -292,6 +313,83 @@ namespace BattleSim.Core.Simulation
 
         // ------------------------------------------------------------------ per-tick phases
 
+        private void RunProjectiles()
+        {
+            // Create a copy of projectiles and sort them in ascending order of NumericId
+            List<RuntimeProjectile> sorted = new List<RuntimeProjectile>(_projectiles);
+            sorted.Sort((a, b) => a.NumericId.CompareTo(b.NumericId));
+
+            foreach (RuntimeProjectile p in sorted)
+            {
+                // Remove projectile if TTL expired
+                if (p.RemainingTtlTick <= 0)
+                {
+                    _projectiles.Remove(p);
+                    continue;
+                }
+
+                RuntimeEntity? target = FindEntityById(p.TargetEntityId);
+                if (target == null || target.Hp <= Fp.Zero)
+                {
+                    _projectiles.Remove(p);
+                    continue;
+                }
+
+                long prevPos = p.PositionMilli;
+                long dest = p.ImpactProgressMilli;
+                long speed = p.SpeedMilliPerTick;
+
+                long nextPos = prevPos;
+                bool arrived = false;
+
+                if (prevPos < dest)
+                {
+                    nextPos = prevPos + speed;
+                    if (nextPos >= dest)
+                    {
+                        nextPos = dest;
+                        arrived = true;
+                    }
+                }
+                else if (prevPos > dest)
+                {
+                    nextPos = prevPos - speed;
+                    if (nextPos <= dest)
+                    {
+                        nextPos = dest;
+                        arrived = true;
+                    }
+                }
+                else
+                {
+                    nextPos = dest;
+                    arrived = true;
+                }
+
+                p.PositionMilli = nextPos;
+
+                if (!arrived && Math.Abs(nextPos - dest) <= BattleCoreDefaults.ProjectileHitRadiusMilli)
+                {
+                    arrived = true;
+                }
+
+                if (arrived)
+                {
+                    // Apply damage if target is within hit radius of impact point upon arrival
+                    if (Math.Abs(target.PositionMilli - dest) <= BattleCoreDefaults.ProjectileHitRadiusMilli)
+                    {
+                        target.Hp = target.Hp - p.Damage;
+                    }
+                    _projectiles.Remove(p);
+                }
+                else
+                {
+                    // Decrement TTL if still traveling
+                    p.RemainingTtlTick--;
+                }
+            }
+        }
+
         private void RunCombat()
         {
             // Snapshot active entities in creation order (NumericId order) for determinism.
@@ -302,18 +400,62 @@ namespace BattleSim.Core.Simulation
             {
                 if (entity.Hp <= Fp.Zero) continue; // died earlier this tick
 
-                RuntimeEntity? target = FindNearestOpponent(entity);
+                RuntimeEntity? target = null;
+                if (entity.AttackKind == AttackKind.Melee)
+                {
+                    target = FindNearestOpponentMelee(entity);
+                }
+                else if (entity.AttackKind == AttackKind.Projectile)
+                {
+                    target = FindNearestOpponentProjectile(entity);
+                }
+                else
+                {
+                    throw new InvalidOperationException("Unknown AttackKind: " + entity.AttackKind);
+                }
+
                 if (target != null)
                 {
                     // Target in range. Check if we can attack.
                     if (_currentTick >= entity.NextAttackReadyTick)
                     {
-                        // Attack: deal damage, no movement.
                         Fp calculatedDamage = entity.Attack - target.Defense;
                         Fp minDamage = Fp.FromRaw(BattleCoreDefaults.MinDamageRaw);
                         Fp finalDamage = calculatedDamage < minDamage ? minDamage : calculatedDamage;
 
-                        target.Hp = target.Hp - finalDamage;
+                        if (entity.AttackKind == AttackKind.Melee)
+                        {
+                            // Melee: deal damage immediately
+                            target.Hp = target.Hp - finalDamage;
+                        }
+                        else if (entity.AttackKind == AttackKind.Projectile)
+                        {
+                            // Projectile: spawn projectile instead of dealing instant damage
+                            string projectileLaneId = target.LaneId;
+
+                            LaneDefinition sourceLane = FindLaneDefinition(entity.LaneId);
+                            LaneDefinition targetLane = FindLaneDefinition(target.LaneId);
+                            long startPos = (entity.PositionMilli * targetLane.LaneLengthMilli) / sourceLane.LaneLengthMilli;
+
+                            int projNumId = _nextProjectileId++;
+                            RuntimeProjectile proj = new RuntimeProjectile
+                            {
+                                NumericId = projNumId,
+                                ProjectileId = "p_" + projNumId,
+                                Owner = entity.Owner,
+                                SourceLaneId = entity.LaneId,
+                                ProjectileLaneId = projectileLaneId,
+                                TargetLaneId = target.LaneId,
+                                TargetEntityId = target.EntityId,
+                                SourceProgressMilli = entity.PositionMilli,
+                                PositionMilli = startPos,
+                                ImpactProgressMilli = target.PositionMilli, // fire-time target position snapshot
+                                Damage = finalDamage,
+                                SpeedMilliPerTick = entity.ProjectileSpeedMilliPerTick,
+                                RemainingTtlTick = BattleCoreDefaults.ProjectileDefaultTtlTick
+                            };
+                            _projectiles.Add(proj);
+                        }
 
                         // Reset cooldown.
                         entity.NextAttackReadyTick = _currentTick + entity.AttackPeriodTick;
@@ -417,25 +559,28 @@ namespace BattleSim.Core.Simulation
 
         // ------------------------------------------------------------------ combat helpers
 
-        private RuntimeEntity? FindNearestOpponent(RuntimeEntity attacker)
+        private void GetWorldPosition(RuntimeEntity entity, out long x, out long y)
+        {
+            LaneDefinition lane = FindLaneDefinition(entity.LaneId);
+            long len = lane.LaneLengthMilli;
+            long p = entity.PositionMilli;
+            x = lane.LaneWorldStartXMilli + (p * (lane.LaneWorldEndXMilli - lane.LaneWorldStartXMilli)) / len;
+            y = lane.LaneWorldStartYMilli + (p * (lane.LaneWorldEndYMilli - lane.LaneWorldStartYMilli)) / len;
+        }
+
+        private RuntimeEntity? FindNearestOpponentMelee(RuntimeEntity attacker)
         {
             RuntimeEntity? nearest = null;
             long nearestDist = long.MaxValue;
-
-            LaneDefinition attackerLane = FindLaneDefinition(attacker.LaneId);
 
             foreach (RuntimeEntity e in _entities)
             {
                 if (e == attacker) continue;
                 if (e.Owner == attacker.Owner) continue;
                 if (e.Hp <= Fp.Zero) continue;
+                if (e.LaneId != attacker.LaneId) continue; // Melee is same lane only
 
-                LaneDefinition targetLane = FindLaneDefinition(e.LaneId);
-
-                long dx = Math.Abs(e.PositionMilli - attacker.PositionMilli);
-                long dy = Math.Abs(targetLane.LaneWorldYMilli - attackerLane.LaneWorldYMilli);
-                long dist = dx + dy; // Manhattan distance
-
+                long dist = Math.Abs(e.PositionMilli - attacker.PositionMilli);
                 if (dist > attacker.RangeMilli) continue;
 
                 if (nearest == null
@@ -449,6 +594,44 @@ namespace BattleSim.Core.Simulation
             return nearest;
         }
 
+        private RuntimeEntity? FindNearestOpponentProjectile(RuntimeEntity attacker)
+        {
+            RuntimeEntity? nearest = null;
+            long nearestDist = long.MaxValue;
+
+            long attX, attY;
+            GetWorldPosition(attacker, out attX, out attY);
+
+            foreach (RuntimeEntity e in _entities)
+            {
+                if (e == attacker) continue;
+                if (e.Owner == attacker.Owner) continue;
+                if (e.Hp <= Fp.Zero) continue;
+
+                long tgtX, tgtY;
+                GetWorldPosition(e, out tgtX, out tgtY);
+
+                long dist = Math.Abs(attX - tgtX) + Math.Abs(attY - tgtY);
+                if (dist > attacker.RangeMilli) continue;
+
+                if (nearest == null
+                    || dist < nearestDist
+                    || (dist == nearestDist && e.NumericId < nearest.NumericId))
+                {
+                    nearest = e;
+                    nearestDist = dist;
+                }
+            }
+            return nearest;
+        }
+
+        private RuntimeEntity? FindEntityById(string entityId)
+        {
+            foreach (RuntimeEntity e in _entities)
+                if (e.EntityId == entityId) return e;
+            return null;
+        }
+
         private LaneDefinition FindLaneDefinition(string laneId)
         {
             foreach (LaneDefinition lane in _config.Lanes)
@@ -459,6 +642,7 @@ namespace BattleSim.Core.Simulation
         private RuntimeEntity CreateEntity(
             string laneId, BattleSide owner,
             Fp hp, Fp attack, Fp defense, long rangeMilli, long speedMilliPerTick, int attackPeriodTick,
+            AttackKind attackKind, long projectileSpeedMilliPerTick,
             long startPosition, int slotIndex)
         {
             int id = _nextEntityId++;
@@ -477,6 +661,8 @@ namespace BattleSim.Core.Simulation
                 SlotIndex           = slotIndex,
                 AttackPeriodTick    = attackPeriodTick,
                 NextAttackReadyTick = _currentTick,
+                AttackKind          = attackKind,
+                ProjectileSpeedMilliPerTick = projectileSpeedMilliPerTick,
             };
         }
 
@@ -557,6 +743,25 @@ namespace BattleSim.Core.Simulation
             public int SlotIndex;
             public int AttackPeriodTick;
             public int NextAttackReadyTick;
+            public AttackKind AttackKind;
+            public long ProjectileSpeedMilliPerTick;
+        }
+
+        private sealed class RuntimeProjectile
+        {
+            public int NumericId;
+            public string ProjectileId = "";
+            public BattleSide Owner;
+            public string SourceLaneId = "";
+            public string ProjectileLaneId = "";
+            public string TargetLaneId = "";
+            public string TargetEntityId = "";
+            public long SourceProgressMilli;
+            public long PositionMilli;
+            public long ImpactProgressMilli;
+            public Fp Damage;
+            public long SpeedMilliPerTick;
+            public int RemainingTtlTick;
         }
     }
 }

@@ -17,19 +17,34 @@ namespace BattleSim.Core.State
         /// <summary>Index 0 = SideA, Index 1 = SideB.</summary>
         public IReadOnlyList<BattleSideState> Sides { get; private set; }
         public IReadOnlyList<LaneState> Lanes { get; private set; }
+        public IReadOnlyList<BattleProjectile> Projectiles { get; private set; }
 
+        // v0.4 Backward compatible constructor
         public BattleState(
             int currentTick,
             bool isTerminated,
             BattleEndReason endReason,
             IReadOnlyList<BattleSideState> sides,
             IReadOnlyList<LaneState> lanes)
+            : this(currentTick, isTerminated, endReason, sides, lanes, new BattleProjectile[0])
+        {
+        }
+
+        // v0.5 Constructor with projectiles support
+        public BattleState(
+            int currentTick,
+            bool isTerminated,
+            BattleEndReason endReason,
+            IReadOnlyList<BattleSideState> sides,
+            IReadOnlyList<LaneState> lanes,
+            IReadOnlyList<BattleProjectile> projectiles)
         {
             CurrentTick = currentTick;
             IsTerminated = isTerminated;
             EndReason = endReason;
             Sides = sides;
             Lanes = lanes;
+            Projectiles = projectiles;
         }
     }
 
