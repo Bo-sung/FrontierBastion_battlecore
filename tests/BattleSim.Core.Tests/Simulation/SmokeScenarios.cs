@@ -33,7 +33,7 @@ namespace BattleSim.Core.Tests.Simulation
         {
             LaneDefinition[] lanes = new LaneDefinition[]
             {
-                new LaneDefinition("lane_ground", LaneType.Ground, 1_000L),
+                new LaneDefinition("lane_ground", LaneType.Ground, 1_000L, 0L),
             };
             BattleSideConfig cfgA = new BattleSideConfig(
                 BattleSide.SideA,
@@ -66,20 +66,20 @@ namespace BattleSim.Core.Tests.Simulation
                 new SlotDefinition(
                     slotIndex: 0, pilotId: "pilot_a", droneSquadId: "drone_a",
                     energyCost: Fp.FromInt(20), cooldownTick: 5,
-                    droneHp: Fp.FromInt(100), droneAttack: Fp.FromInt(50),
-                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 2_000L,
-                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
-                    pilotRangeMilli: 1_000L, pilotSpeedMilliPerTick: 300L),
+                    droneHp: Fp.FromInt(100), droneAttack: Fp.FromInt(50), droneDefense: Fp.Zero,
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 2_000L, droneAttackPeriodTick: 1,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20), pilotDefense: Fp.Zero,
+                    pilotRangeMilli: 1_000L, pilotSpeedMilliPerTick: 300L, pilotAttackPeriodTick: 1),
             };
             SlotDefinition[] slotsB = new SlotDefinition[]
             {
                 new SlotDefinition(
                     slotIndex: 0, pilotId: "pilot_b", droneSquadId: "drone_b",
                     energyCost: Fp.FromInt(20), cooldownTick: 5,
-                    droneHp: Fp.FromInt(100), droneAttack: Fp.FromInt(10),
-                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 500L,
-                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
-                    pilotRangeMilli: 1_000L, pilotSpeedMilliPerTick: 300L),
+                    droneHp: Fp.FromInt(100), droneAttack: Fp.FromInt(10), droneDefense: Fp.Zero,
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 500L, droneAttackPeriodTick: 1,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20), pilotDefense: Fp.Zero,
+                    pilotRangeMilli: 1_000L, pilotSpeedMilliPerTick: 300L, pilotAttackPeriodTick: 1),
             };
             BattleInitialState initial = new BattleInitialState(
                 "smoke_side_a_victory", 1L,
@@ -104,7 +104,7 @@ namespace BattleSim.Core.Tests.Simulation
         {
             LaneDefinition[] lanes = new LaneDefinition[]
             {
-                new LaneDefinition("lane_ground", LaneType.Ground, 1_000L),
+                new LaneDefinition("lane_ground", LaneType.Ground, 1_000L, 0L),
             };
             BattleSideConfig cfgA = new BattleSideConfig(
                 BattleSide.SideA,
@@ -135,10 +135,10 @@ namespace BattleSim.Core.Tests.Simulation
                 new SlotDefinition(
                     slotIndex: 0, pilotId: "pilot_a", droneSquadId: "drone_a",
                     energyCost: Fp.FromInt(20), cooldownTick: 5,
-                    droneHp: Fp.FromInt(100), droneAttack: Fp.FromInt(10),
-                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 500L,
-                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
-                    pilotRangeMilli: 1_000L, pilotSpeedMilliPerTick: 300L),
+                    droneHp: Fp.FromInt(100), droneAttack: Fp.FromInt(10), droneDefense: Fp.Zero,
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 500L, droneAttackPeriodTick: 1,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20), pilotDefense: Fp.Zero,
+                    pilotRangeMilli: 1_000L, pilotSpeedMilliPerTick: 300L, pilotAttackPeriodTick: 1),
             };
             // SideB drone: speed 2000 > lane 1000 → reaches SideA base in 1 tick. Attack 50 > hp 1.
             SlotDefinition[] slotsB = new SlotDefinition[]
@@ -146,10 +146,10 @@ namespace BattleSim.Core.Tests.Simulation
                 new SlotDefinition(
                     slotIndex: 0, pilotId: "pilot_b", droneSquadId: "drone_b",
                     energyCost: Fp.FromInt(20), cooldownTick: 5,
-                    droneHp: Fp.FromInt(100), droneAttack: Fp.FromInt(50),
-                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 2_000L,
-                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
-                    pilotRangeMilli: 1_000L, pilotSpeedMilliPerTick: 300L),
+                    droneHp: Fp.FromInt(100), droneAttack: Fp.FromInt(50), droneDefense: Fp.Zero,
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 2_000L, droneAttackPeriodTick: 1,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20), pilotDefense: Fp.Zero,
+                    pilotRangeMilli: 1_000L, pilotSpeedMilliPerTick: 300L, pilotAttackPeriodTick: 1),
             };
             BattleInitialState initial = new BattleInitialState(
                 "smoke_side_b_victory", 2L,
@@ -174,7 +174,7 @@ namespace BattleSim.Core.Tests.Simulation
         {
             LaneDefinition[] lanes = new LaneDefinition[]
             {
-                new LaneDefinition("lane_ground", LaneType.Ground, 100_000L),
+                new LaneDefinition("lane_ground", LaneType.Ground, 100_000L, 0L),
             };
             BattleSideConfig cfgA = new BattleSideConfig(
                 BattleSide.SideA,
@@ -205,10 +205,10 @@ namespace BattleSim.Core.Tests.Simulation
                 new SlotDefinition(
                     slotIndex: 0, pilotId: "pilot_a", droneSquadId: "drone_a",
                     energyCost: Fp.FromInt(20), cooldownTick: 5,
-                    droneHp: Fp.FromInt(100), droneAttack: Fp.FromInt(10),
-                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 500L,
-                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
-                    pilotRangeMilli: 1_000L, pilotSpeedMilliPerTick: 300L),
+                    droneHp: Fp.FromInt(100), droneAttack: Fp.FromInt(10), droneDefense: Fp.Zero,
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 500L, droneAttackPeriodTick: 1,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20), pilotDefense: Fp.Zero,
+                    pilotRangeMilli: 1_000L, pilotSpeedMilliPerTick: 300L, pilotAttackPeriodTick: 1),
             };
             BattleInitialState initial = new BattleInitialState(
                 "smoke_timeout_side_b_tiebreak", 3L,

@@ -23,7 +23,8 @@
     {
       "lane_id": "lane_ground",
       "lane_type": "Ground",
-      "lane_length_milli": 100000
+      "lane_length_milli": 100000,
+      "lane_world_y_milli": 0
     }
   ]
 }

@@ -62,6 +62,14 @@ namespace BattleSim.Core.Tests.Simulation
             Timeout_SideBWinsByHpRatio();
             MaxBattleTick_TimeoutStillWorks();
             Determinism_SameSetupProducesSameResult();
+
+            // ---- v0.4 tests ----
+            Defense_ReducesDamageButNotBelowMinDamage();
+            AttackPeriod_PreventsEveryTickAttack();
+            AttackCooldown_HoldsPositionWhenTargetInRange();
+            CrossLaneTargeting_UsesLaneWorldYManhattanDistance();
+            CrossLaneTargeting_DoesNotHitWhenVerticalDistanceOutOfRange();
+            TargetTieBreak_UsesNumericId();
         }
 
         // ------------------------------------------------------------------ config / state helpers
@@ -115,7 +123,7 @@ namespace BattleSim.Core.Tests.Simulation
             long laneLen = laneLengthMilli > 0 ? laneLengthMilli : DefaultLaneLen;
             LaneDefinition[] lanes = new LaneDefinition[]
             {
-                new LaneDefinition("lane_ground", LaneType.Ground, laneLen),
+                new LaneDefinition("lane_ground", LaneType.Ground, laneLen, 0L),
             };
             BattleSideConfig cfgA = new BattleSideConfig(
                 BattleSide.SideA, sideABaseHp ?? Fp.FromInt(1000),
@@ -137,6 +145,31 @@ namespace BattleSim.Core.Tests.Simulation
                 timeOutTieWinnerSide:       timeOutTieWinnerSide);
         }
 
+        private static SlotDefinition CreateTestSlotDef(
+            int slotIndex,
+            string pilotId,
+            string droneSquadId,
+            Fp energyCost,
+            int cooldownTick,
+            Fp droneHp,
+            Fp droneAttack,
+            long droneRangeMilli,
+            long droneSpeedMilliPerTick,
+            Fp pilotHp,
+            Fp pilotAttack,
+            long pilotRangeMilli,
+            long pilotSpeedMilliPerTick,
+            Fp? droneDefense = null,
+            int droneAttackPeriodTick = 1,
+            Fp? pilotDefense = null,
+            int pilotAttackPeriodTick = 1)
+        {
+            return new SlotDefinition(
+                slotIndex, pilotId, droneSquadId, energyCost, cooldownTick,
+                droneHp, droneAttack, droneDefense ?? Fp.Zero, droneRangeMilli, droneSpeedMilliPerTick, droneAttackPeriodTick,
+                pilotHp, pilotAttack, pilotDefense ?? Fp.Zero, pilotRangeMilli, pilotSpeedMilliPerTick, pilotAttackPeriodTick);
+        }
+
         /// <summary>
         /// Slot 0: energyCost 10, cooldown 100, droneHp 100/atk 10/range 1000/speed 500,
         /// pilotHp 200/atk 20/range 1500/speed 300.
@@ -145,7 +178,7 @@ namespace BattleSim.Core.Tests.Simulation
         {
             return new BattleSideInitialState(side, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     slotIndex: 0, pilotId: "pilot_a", droneSquadId: "drone_a",
                     energyCost: Fp.FromInt(10), cooldownTick: 100,
                     droneHp: Fp.FromInt(100), droneAttack: Fp.FromInt(10),
@@ -615,8 +648,8 @@ namespace BattleSim.Core.Tests.Simulation
         {
             LaneDefinition[] lanes = new LaneDefinition[]
             {
-                new LaneDefinition("lane_a", LaneType.Ground, DefaultLaneLen),
-                new LaneDefinition("lane_b", LaneType.Ground, DefaultLaneLen),
+                new LaneDefinition("lane_a", LaneType.Ground, DefaultLaneLen, 0L),
+                new LaneDefinition("lane_b", LaneType.Ground, DefaultLaneLen, 2000L),
             };
             BattleSideConfig cfgA = new BattleSideConfig(
                 BattleSide.SideA, Fp.FromInt(1000), Fp.FromInt(10), Fp.FromInt(100), Fp.Zero);
@@ -627,14 +660,14 @@ namespace BattleSim.Core.Tests.Simulation
 
             BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     0, "pilot_a", "drone_a", Fp.FromInt(10), 100,
                     Fp.FromInt(100), Fp.FromInt(10), 1_000L, 500L,
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
             });
             BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     0, "pilot_b", "drone_b", Fp.FromInt(10), 100,
                     Fp.FromInt(100), Fp.FromInt(10), 1_000L, 500L,
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
@@ -669,14 +702,14 @@ namespace BattleSim.Core.Tests.Simulation
 
             BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     0, "pilot_a", "drone_a", Fp.FromInt(10), 100,
                     Fp.FromInt(200), Fp.FromInt(10), 2_000L, 500L, // drone range=2000 (> laneLen=1000)
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
             });
             BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     0, "pilot_b", "drone_b", Fp.FromInt(10), 100,
                     Fp.FromInt(50), Fp.FromInt(5), 500L, 100L,     // SideB entity HP=50, range=500
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
@@ -715,18 +748,18 @@ namespace BattleSim.Core.Tests.Simulation
                 sideBInitialEnergy: Fp.FromInt(10));
             BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     0, "p0", "d0", Fp.FromInt(10), 5,
                     Fp.FromInt(100), Fp.FromInt(10), 3_000L, 200L, // range covers whole lane
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
-                new SlotDefinition(
+                CreateTestSlotDef(
                     1, "p1", "d1", Fp.FromInt(10), 5,
                     Fp.FromInt(100), Fp.FromInt(10), 3_000L, 200L,
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
             });
             BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     0, "pb", "db", Fp.FromInt(10), 5,
                     Fp.FromInt(50), Fp.FromInt(5), 500L, 100L,
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
@@ -762,14 +795,14 @@ namespace BattleSim.Core.Tests.Simulation
                 sideBInitialEnergy: Fp.FromInt(10));
             BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     0, "p", "d", Fp.FromInt(10), 100,
                     Fp.FromInt(200), Fp.FromInt(10), 2_000L, 500L, // drone atk=10, kills SideB(HP=5) in 1 hit
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
             });
             BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     0, "pb", "db", Fp.FromInt(10), 100,
                     Fp.FromInt(5), Fp.FromInt(2), 500L, 100L,      // HP=5 → one-shot
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
@@ -797,7 +830,7 @@ namespace BattleSim.Core.Tests.Simulation
                 laneLengthMilli: laneLen);
             BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     0, "p", "d", Fp.FromInt(10), 100,
                     Fp.FromInt(100), Fp.FromInt(10), 500L, 2_000L, // speed=2000 > laneLen=1000
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
@@ -825,7 +858,7 @@ namespace BattleSim.Core.Tests.Simulation
                 sideBInitialEnergy: Fp.FromInt(10));
             BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     0, "pb", "db", Fp.FromInt(10), 100,
                     Fp.FromInt(50), Fp.FromInt(10), 500L, 2_000L,  // speed=2000 > laneLen=1000
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
@@ -853,7 +886,7 @@ namespace BattleSim.Core.Tests.Simulation
                 sideBBaseHp: Fp.FromInt(1));
             BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     0, "p", "d", Fp.FromInt(10), 100,
                     Fp.FromInt(100), Fp.FromInt(50), 500L, 2_000L, // attack=50, speed=2000
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
@@ -885,7 +918,7 @@ namespace BattleSim.Core.Tests.Simulation
                 sideBInitialEnergy: Fp.FromInt(10));
             BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     0, "pb", "db", Fp.FromInt(10), 100,
                     Fp.FromInt(50), Fp.FromInt(50), 500L, 2_000L,  // attack=50, speed=2000
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
@@ -919,7 +952,7 @@ namespace BattleSim.Core.Tests.Simulation
                 sideBBaseHp: Fp.FromInt(1000));
             BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     0, "p", "d", Fp.FromInt(10), 100,
                     Fp.FromInt(100), Fp.FromInt(10), 500L, 2_000L,
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
@@ -951,7 +984,7 @@ namespace BattleSim.Core.Tests.Simulation
                 sideBInitialEnergy: Fp.FromInt(10));
             BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     0, "pb", "db", Fp.FromInt(10), 100,
                     Fp.FromInt(100), Fp.FromInt(10), 500L, 2_000L,
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
@@ -1083,14 +1116,14 @@ namespace BattleSim.Core.Tests.Simulation
                 sideBInitialEnergy: Fp.FromInt(10));
             BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     0, "p", "d", Fp.FromInt(10), 100,
                     Fp.FromInt(100), Fp.FromInt(10), 1_000L, 200L,
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
             });
             BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
             {
-                new SlotDefinition(
+                CreateTestSlotDef(
                     0, "pb", "db", Fp.FromInt(10), 100,
                     Fp.FromInt(30), Fp.FromInt(5), 500L, 200L,
                     Fp.FromInt(200), Fp.FromInt(20), 1_500L, 300L),
@@ -1121,6 +1154,317 @@ namespace BattleSim.Core.Tests.Simulation
                 throw new InvalidOperationException("Determinism: EndReason mismatch.");
             if (ra.ClearTimeTick != rb.ClearTimeTick)
                 throw new InvalidOperationException("Determinism: ClearTimeTick mismatch.");
+        }
+
+        private static void Defense_ReducesDamageButNotBelowMinDamage()
+        {
+            // Case 1: Attack=100, Defense=40 -> damage=60
+            {
+                BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(10), Fp.FromInt(100), Fp.Zero, laneLengthMilli: 1_000L, sideBInitialEnergy: Fp.FromInt(10));
+                BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+                {
+                    CreateTestSlotDef(0, "p", "d", Fp.FromInt(10), 100,
+                        droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(100),
+                        droneRangeMilli: 2_000L, droneSpeedMilliPerTick: 100L,
+                        pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                        pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+                });
+                BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+                {
+                    CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                        droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(10), droneDefense: Fp.FromInt(40),
+                        droneRangeMilli: 2_000L, droneSpeedMilliPerTick: 100L,
+                        pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                        pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+                });
+                BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+                BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+                sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+                sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+                sim.AdvanceTick(); // Attack!
+
+                BattleEntity? target = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideB);
+                if (target == null) throw new InvalidOperationException("Target should be alive.");
+                Fp expectedHp = Fp.FromInt(200) - Fp.FromInt(60);
+                if (target.Hp != expectedHp)
+                    throw new InvalidOperationException(string.Format("Expected HP {0}, got {1}", expectedHp, target.Hp));
+            }
+
+            // Case 2: Attack=10, Defense=40 -> damage should be capped at MinDamageRaw (1.0)
+            {
+                BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(10), Fp.FromInt(100), Fp.Zero, laneLengthMilli: 1_000L, sideBInitialEnergy: Fp.FromInt(10));
+                BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+                {
+                    CreateTestSlotDef(0, "p", "d", Fp.FromInt(10), 100,
+                        droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(10),
+                        droneRangeMilli: 2_000L, droneSpeedMilliPerTick: 100L,
+                        pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                        pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+                });
+                BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+                {
+                    CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                        droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(10), droneDefense: Fp.FromInt(40),
+                        droneRangeMilli: 2_000L, droneSpeedMilliPerTick: 100L,
+                        pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                        pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+                });
+                BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+                BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+                sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+                sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+                sim.AdvanceTick(); // Attack!
+
+                BattleEntity? target = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideB);
+                if (target == null) throw new InvalidOperationException("Target should be alive.");
+                Fp expectedHp = Fp.FromInt(200) - Fp.One; // damage capped at 1.0
+                if (target.Hp != expectedHp)
+                    throw new InvalidOperationException(string.Format("Expected HP {0}, got {1}", expectedHp, target.Hp));
+            }
+        }
+
+        private static void AttackPeriod_PreventsEveryTickAttack()
+        {
+            // AttackPeriodTick = 3. Spawns at tick 0.
+            // Tick 1: Attacks, NextAttackReadyTick becomes 1 + 3 = 4.
+            // Tick 2: Attack cooldown. Target HP remains same.
+            // Tick 3: Attack cooldown. Target HP remains same.
+            // Tick 4: Attacks again.
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(10), Fp.FromInt(100), Fp.Zero, laneLengthMilli: 1_000L, sideBInitialEnergy: Fp.FromInt(10));
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "p", "d", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(10),
+                    droneRangeMilli: 2_000L, droneSpeedMilliPerTick: 0L, droneAttackPeriodTick: 3,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 2_000L, droneSpeedMilliPerTick: 0L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+            
+            sim.AdvanceTick(); // Tick 1: attack occurs (HP: 200 -> 190)
+            Fp hp1 = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideB)!.Hp;
+            if (hp1 != Fp.FromInt(190)) throw new InvalidOperationException("Tick 1 attack failed.");
+
+            sim.AdvanceTick(); // Tick 2: cooldown (HP: 190)
+            Fp hp2 = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideB)!.Hp;
+            if (hp2 != Fp.FromInt(190)) throw new InvalidOperationException("Tick 2 should be cooldown.");
+
+            sim.AdvanceTick(); // Tick 3: cooldown (HP: 190)
+            Fp hp3 = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideB)!.Hp;
+            if (hp3 != Fp.FromInt(190)) throw new InvalidOperationException("Tick 3 should be cooldown.");
+
+            sim.AdvanceTick(); // Tick 4: attack occurs (HP: 190 -> 180)
+            Fp hp4 = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideB)!.Hp;
+            if (hp4 != Fp.FromInt(180)) throw new InvalidOperationException("Tick 4 attack failed.");
+        }
+
+        private static void AttackCooldown_HoldsPositionWhenTargetInRange()
+        {
+            // Attacker has RangeMilli = 1_000. Spawns at 0.
+            // Target is at 500 (inside range).
+            // Tick 1: Attacks (NextAttackReadyTick = 4), Position = 0.
+            // Tick 2: Attack cooldown but target is in range -> holds position. Position should remain 0.
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(10), Fp.FromInt(100), Fp.Zero, laneLengthMilli: 1_000L, sideBInitialEnergy: Fp.FromInt(10));
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "p", "d", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(10),
+                    droneRangeMilli: 1_000L, droneSpeedMilliPerTick: 200L, droneAttackPeriodTick: 3,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 0L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+
+            sim.AdvanceTick(); // Tick 1: attacks, holds position. (Pos = 0)
+            long pos1 = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideA)!.PositionMilli;
+            if (pos1 != 0) throw new InvalidOperationException("Attacker should not move on tick 1.");
+
+            sim.AdvanceTick(); // Tick 2: cooldown, target still at 1000 (dist 1000 <= 1000) -> holds position! (Pos = 0)
+            long pos2 = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideA)!.PositionMilli;
+            if (pos2 != 0) throw new InvalidOperationException("Attacker should hold position on tick 2 during cooldown.");
+        }
+
+        private static void CrossLaneTargeting_UsesLaneWorldYManhattanDistance()
+        {
+            // Attacker is in lane_a (Y = 0L) at position 0. RangeMilli = 1_000.
+            // Target 1 is in lane_b (Y = 800L) at position 100.
+            //   Manhattan distance = |100 - 0| + |800 - 0| = 900 <= 1000.
+            // Target 2 is in lane_c (Y = 500L) at position 600.
+            //   Manhattan distance = |600 - 0| + |500 - 0| = 1100 > 1000.
+            // Only Target 1 is in range. Attacker should attack Target 1.
+            LaneDefinition[] lanes = new LaneDefinition[]
+            {
+                new LaneDefinition("lane_a", LaneType.Ground, 1_000L, 0L),
+                new LaneDefinition("lane_b", LaneType.Ground, 1_000L, 800L),
+                new LaneDefinition("lane_c", LaneType.Ground, 1_000L, 500L),
+            };
+            BattleSideConfig cfgA = new BattleSideConfig(BattleSide.SideA, Fp.FromInt(1000), Fp.FromInt(100), Fp.FromInt(100), Fp.Zero);
+            BattleSideConfig cfgB = new BattleSideConfig(BattleSide.SideB, Fp.FromInt(1000), Fp.FromInt(100), Fp.FromInt(100), Fp.Zero);
+            BattleConfigSnapshot cfg = new BattleConfigSnapshot("test", cfgA, cfgB, 200, 100, 50, 3600, lanes);
+
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "p", "d", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(50),
+                    droneRangeMilli: 1_000L, droneSpeedMilliPerTick: 0L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 900L, // speed=900 to reach pos 100 (1000-900)
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L),
+                CreateTestSlotDef(1, "pb2", "db2", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 400L, // speed=400 to reach pos 600 (1000-400)
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L),
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_a", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_b", BattleSide.SideB)); // Target 1
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 1, "lane_c", BattleSide.SideB)); // Target 2
+
+            sim.AdvanceTick(); // Tick 1: Target 1 moves to 100, Target 2 moves to 600.
+            sim.AdvanceTick(); // Tick 2: Attacker is at 0, Target 1 is at 100 (dist 900 <= 1000) -> Attacks. Target 2 is at 600 (dist 1100 > 1000) -> Out of range.
+
+            Fp hpTarget1 = FindByOwner(sim.GetState(), "lane_b", BattleSide.SideB)!.Hp;
+            Fp hpTarget2 = FindByOwner(sim.GetState(), "lane_c", BattleSide.SideB)!.Hp;
+
+            if (hpTarget1 != Fp.FromInt(150)) throw new InvalidOperationException("Target 1 should have been attacked.");
+            if (hpTarget2 != Fp.FromInt(200)) throw new InvalidOperationException("Target 2 should NOT have been attacked.");
+        }
+
+        private static void CrossLaneTargeting_DoesNotHitWhenVerticalDistanceOutOfRange()
+        {
+            // Attacker is in lane_a (Y = 0L) at position 0. RangeMilli = 500.
+            // Target is in lane_b (Y = 600L) at position 0.
+            // Manhattan distance = |0 - 0| + |600 - 0| = 600 > 500.
+            // Target is out of range. Attacker should NOT attack, and should move instead.
+            LaneDefinition[] lanes = new LaneDefinition[]
+            {
+                new LaneDefinition("lane_a", LaneType.Ground, 1_000L, 0L),
+                new LaneDefinition("lane_b", LaneType.Ground, 1_000L, 600L),
+            };
+            BattleSideConfig cfgA = new BattleSideConfig(BattleSide.SideA, Fp.FromInt(1000), Fp.FromInt(100), Fp.FromInt(100), Fp.Zero);
+            BattleSideConfig cfgB = new BattleSideConfig(BattleSide.SideB, Fp.FromInt(1000), Fp.FromInt(100), Fp.FromInt(100), Fp.Zero);
+            BattleConfigSnapshot cfg = new BattleConfigSnapshot("test", cfgA, cfgB, 200, 100, 50, 3600, lanes);
+
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "p", "d", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(50),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 200L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 1000L, // speed=1000 reaches 0
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L),
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_a", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_b", BattleSide.SideB));
+
+            sim.AdvanceTick(); // Tick 1: Target reaches pos 0. SideA drone out of range -> moves to pos 200.
+
+            Fp hpTarget = FindByOwner(sim.GetState(), "lane_b", BattleSide.SideB)!.Hp;
+            long posAttacker = FindByOwner(sim.GetState(), "lane_a", BattleSide.SideA)!.PositionMilli;
+
+            if (hpTarget != Fp.FromInt(200)) throw new InvalidOperationException("Target should NOT have been attacked.");
+            if (posAttacker != 200) throw new InvalidOperationException("Attacker should have moved since target was out of range.");
+        }
+
+        private static void TargetTieBreak_UsesNumericId()
+        {
+            // Attacker is in lane_a (Y = 0) at position 0. RangeMilli = 1_000.
+            // Target 1 (spawned first -> NumericId = 2) is in lane_b (Y = 500) at position 300 (Dist = 800).
+            // Target 2 (spawned second -> NumericId = 3) is in lane_c (Y = 500) at position 300 (Dist = 800).
+            // Distances are identical. NumericId tiebreaker should select Target 1 (NumericId 2).
+            LaneDefinition[] lanes = new LaneDefinition[]
+            {
+                new LaneDefinition("lane_a", LaneType.Ground, 1_000L, 0L),
+                new LaneDefinition("lane_b", LaneType.Ground, 1_000L, 500L),
+                new LaneDefinition("lane_c", LaneType.Ground, 1_000L, 500L),
+            };
+            BattleSideConfig cfgA = new BattleSideConfig(BattleSide.SideA, Fp.FromInt(1000), Fp.FromInt(100), Fp.FromInt(100), Fp.Zero);
+            BattleSideConfig cfgB = new BattleSideConfig(BattleSide.SideB, Fp.FromInt(1000), Fp.FromInt(100), Fp.FromInt(100), Fp.Zero);
+            BattleConfigSnapshot cfg = new BattleConfigSnapshot("test", cfgA, cfgB, 200, 100, 50, 3600, lanes);
+
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "p", "d", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(50),
+                    droneRangeMilli: 1_000L, droneSpeedMilliPerTick: 0L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 700L, // reaches 300
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L),
+                CreateTestSlotDef(1, "pb2", "db2", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 700L, // reaches 300
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L),
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_a", BattleSide.SideA)); // NumericId = 1
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_b", BattleSide.SideB)); // NumericId = 2 (Target 1)
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 1, "lane_c", BattleSide.SideB)); // NumericId = 3 (Target 2)
+
+            sim.AdvanceTick(); // Tick 1: both targets move to 300.
+            sim.AdvanceTick(); // Tick 2: both targets at 300 (dist 800 <= 1000) -> Attacks the target with lower NumericId (Target 1).
+
+            Fp hpTarget1 = FindByOwner(sim.GetState(), "lane_b", BattleSide.SideB)!.Hp;
+            Fp hpTarget2 = FindByOwner(sim.GetState(), "lane_c", BattleSide.SideB)!.Hp;
+
+            if (hpTarget1 != Fp.FromInt(150)) throw new InvalidOperationException("Target 1 (lower NumericId) should have been attacked.");
+            if (hpTarget2 != Fp.FromInt(200)) throw new InvalidOperationException("Target 2 (higher NumericId) should NOT have been attacked.");
         }
     }
 }

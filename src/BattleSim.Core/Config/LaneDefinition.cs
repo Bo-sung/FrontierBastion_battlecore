@@ -12,8 +12,9 @@ namespace BattleSim.Core.Config
         public string LaneId { get; private set; }
         public LaneType LaneType { get; private set; }
         public long LaneLengthMilli { get; private set; }
+        public long LaneWorldYMilli { get; private set; }
 
-        public LaneDefinition(string laneId, LaneType laneType, long laneLengthMilli)
+        public LaneDefinition(string laneId, LaneType laneType, long laneLengthMilli, long laneWorldYMilli)
         {
             if (string.IsNullOrEmpty(laneId))
                 throw new ArgumentException("laneId is required.", "laneId");
@@ -22,6 +23,7 @@ namespace BattleSim.Core.Config
             LaneId = laneId;
             LaneType = laneType;
             LaneLengthMilli = laneLengthMilli;
+            LaneWorldYMilli = laneWorldYMilli;
         }
     }
 }
