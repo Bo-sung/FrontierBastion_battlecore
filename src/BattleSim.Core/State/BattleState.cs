@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using BattleSim.Core.FixedPoint;
 using BattleSim.Core.Results;
+using BattleSim.Core.Events;
 
 namespace BattleSim.Core.State
 {
@@ -18,6 +19,7 @@ namespace BattleSim.Core.State
         public IReadOnlyList<BattleSideState> Sides { get; private set; }
         public IReadOnlyList<LaneState> Lanes { get; private set; }
         public IReadOnlyList<BattleProjectile> Projectiles { get; private set; }
+        public IReadOnlyList<BattleEvent> RecentEvents { get; private set; }
 
         // v0.4 Backward compatible constructor
         public BattleState(
@@ -26,7 +28,7 @@ namespace BattleSim.Core.State
             BattleEndReason endReason,
             IReadOnlyList<BattleSideState> sides,
             IReadOnlyList<LaneState> lanes)
-            : this(currentTick, isTerminated, endReason, sides, lanes, new BattleProjectile[0])
+            : this(currentTick, isTerminated, endReason, sides, lanes, new BattleProjectile[0], new BattleEvent[0])
         {
         }
 
@@ -38,6 +40,19 @@ namespace BattleSim.Core.State
             IReadOnlyList<BattleSideState> sides,
             IReadOnlyList<LaneState> lanes,
             IReadOnlyList<BattleProjectile> projectiles)
+            : this(currentTick, isTerminated, endReason, sides, lanes, projectiles, new BattleEvent[0])
+        {
+        }
+
+        // v0.7 Constructor with events support
+        public BattleState(
+            int currentTick,
+            bool isTerminated,
+            BattleEndReason endReason,
+            IReadOnlyList<BattleSideState> sides,
+            IReadOnlyList<LaneState> lanes,
+            IReadOnlyList<BattleProjectile> projectiles,
+            IReadOnlyList<BattleEvent> recentEvents)
         {
             CurrentTick = currentTick;
             IsTerminated = isTerminated;
@@ -45,6 +60,7 @@ namespace BattleSim.Core.State
             Sides = sides;
             Lanes = lanes;
             Projectiles = projectiles;
+            RecentEvents = recentEvents;
         }
     }
 

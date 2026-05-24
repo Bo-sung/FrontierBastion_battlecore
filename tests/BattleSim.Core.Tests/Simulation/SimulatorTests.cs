@@ -7,6 +7,7 @@ using BattleSim.Core.FixedPoint;
 using BattleSim.Core.Results;
 using BattleSim.Core.Simulation;
 using BattleSim.Core.State;
+using BattleSim.Core.Events;
 
 namespace BattleSim.Core.Tests.Simulation
 {
@@ -89,6 +90,18 @@ namespace BattleSim.Core.Tests.Simulation
             Knockback_ClampsAtLaneBounds();
             BaseDamage_DoesNotApplyKnockback();
             TargetInRange_HoldsPositionWhileAttackCooldown();
+
+            // ---- v0.7 tests ----
+            Events_SequenceMatchesListIndex();
+            Events_TickMatchesReturnedBattleStateCurrentTick();
+            Events_EntitySpawned_EmittedForSpawnAndDeploy();
+            Events_EntityRemoved_EmittedForRecallOnly();
+            Events_MeleeCombat_EmitsAttackDamageKnockback();
+            Events_ProjectileFireAndHit_EmitsExpectedSequence();
+            Events_ProjectileMiss_EmitsMissWithoutDamageOrKnockback();
+            Events_BaseDamage_EmitsBaseDamagedOnly();
+            Events_EntityDied_EmittedInNumericIdOrder();
+            Events_BattleEnded_EmitsWinnerAndEndReason();
         }
 
         // ------------------------------------------------------------------ config / state helpers
@@ -2158,6 +2171,401 @@ namespace BattleSim.Core.Tests.Simulation
             BattleEntity? droneA = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideA);
             if (droneA == null) throw new InvalidOperationException("Drone A not found");
             if (droneA.PositionMilli != 1000) throw new InvalidOperationException("Drone A should hold position at 1000. Got: " + droneA.PositionMilli);
+        }
+
+        private static void Events_SequenceMatchesListIndex()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(100), Fp.Zero);
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.AdvanceTick();
+            BattleState state = sim.GetState();
+            var events = state.RecentEvents;
+            if (events.Count == 0) throw new InvalidOperationException("No events emitted.");
+            for (int i = 0; i < events.Count; i++)
+            {
+                if (events[i].Sequence != i)
+                    throw new InvalidOperationException(string.Format("Sequence mismatch: expected {0}, got {1}", i, events[i].Sequence));
+            }
+        }
+
+        private static void Events_TickMatchesReturnedBattleStateCurrentTick()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(100), Fp.Zero);
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.AdvanceTick();
+            BattleState state = sim.GetState();
+            var events = state.RecentEvents;
+            if (events.Count == 0) throw new InvalidOperationException("No events emitted.");
+            foreach (var ev in events)
+            {
+                if (ev.Tick != state.CurrentTick)
+                    throw new InvalidOperationException(string.Format("Tick mismatch: event tick {0}, state current tick {1}", ev.Tick, state.CurrentTick));
+            }
+        }
+
+        private static void Events_EntitySpawned_EmittedForSpawnAndDeploy()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(100), Fp.Zero);
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground", BattleSide.SideA));
+            sim.AdvanceTick();
+            BattleState state = sim.GetState();
+            var events = state.RecentEvents;
+            int spawnCount = 0;
+            foreach (var ev in events)
+            {
+                if (ev.EventType == BattleEventType.EntitySpawned)
+                {
+                    spawnCount++;
+                    if (string.IsNullOrEmpty(ev.EntityId))
+                        throw new InvalidOperationException("Spawned EntityId is empty.");
+                    if (ev.LaneId != "lane_ground")
+                        throw new InvalidOperationException("Spawned LaneId mismatch.");
+                    if (ev.SourceSide != BattleSide.SideA)
+                        throw new InvalidOperationException("Spawned SourceSide mismatch.");
+                }
+            }
+            if (spawnCount != 2)
+                throw new InvalidOperationException(string.Format("Expected 2 Spawn events, got {0}", spawnCount));
+        }
+
+        private static void Events_EntityRemoved_EmittedForRecallOnly()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(100), Fp.Zero);
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground", BattleSide.SideA));
+            sim.AdvanceTick(); // Tick 1: Deploy
+#pragma warning disable CS8625
+            sim.SubmitCommand(BattleCommand.RecallPilot(1, 0, null, BattleSide.SideA));
+#pragma warning restore CS8625
+            sim.AdvanceTick(); // Tick 2: Recall
+            BattleState state = sim.GetState();
+            var events = state.RecentEvents;
+            bool foundRemoved = false;
+            foreach (var ev in events)
+            {
+                if (ev.EventType == BattleEventType.EntityRemoved)
+                {
+                    foundRemoved = true;
+                    if (string.IsNullOrEmpty(ev.EntityId))
+                        throw new InvalidOperationException("Removed EntityId is empty.");
+                    if (ev.LaneId != "lane_ground")
+                        throw new InvalidOperationException("Removed LaneId mismatch.");
+                    if (ev.SourceSide != BattleSide.SideA)
+                        throw new InvalidOperationException("Removed SourceSide mismatch.");
+                }
+                if (ev.EventType == BattleEventType.EntityDied)
+                {
+                    throw new InvalidOperationException("Recall should not emit EntityDied.");
+                }
+            }
+            if (!foundRemoved)
+                throw new InvalidOperationException("EntityRemoved event not found on recall.");
+        }
+
+        private static void Events_MeleeCombat_EmitsAttackDamageKnockback()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(100), Fp.Zero, laneLengthMilli: 1000L, sideBInitialEnergy: Fp.FromInt(100));
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pa", "da", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(50),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 0L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 600L, // moves to 400
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+
+            sim.AdvanceTick(); // Spawn (Tick 1)
+            sim.AdvanceTick(); // Attack! (Tick 2)
+
+            BattleState state = sim.GetState();
+            var events = state.RecentEvents;
+            bool foundAttack = false;
+            bool foundDamage = false;
+            bool foundKnockback = false;
+
+            foreach (var ev in events)
+            {
+                if (ev.EventType == BattleEventType.AttackStarted)
+                {
+                    foundAttack = true;
+                    if (ev.AttackKind != AttackKind.Melee)
+                        throw new InvalidOperationException("AttackKind should be Melee.");
+                }
+                if (ev.EventType == BattleEventType.DamageApplied)
+                {
+                    foundDamage = true;
+                    if (ev.DamageAmount != Fp.FromInt(50))
+                        throw new InvalidOperationException("DamageAmount should be 50.");
+                }
+                if (ev.EventType == BattleEventType.KnockbackApplied)
+                {
+                    foundKnockback = true;
+                    if (ev.PreviousPositionMilli != 400L)
+                        throw new InvalidOperationException(string.Format("PreviousPositionMilli should be 400, got {0}", ev.PreviousPositionMilli));
+                    if (ev.PositionMilli != 600L)
+                        throw new InvalidOperationException(string.Format("PositionMilli should reflect knockback, got {0}", ev.PositionMilli));
+                }
+            }
+
+            if (!foundAttack || !foundDamage || !foundKnockback)
+                throw new InvalidOperationException("Melee hit did not emit expected sequence.");
+        }
+
+        private static void Events_ProjectileFireAndHit_EmitsExpectedSequence()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(100), Fp.Zero, laneLengthMilli: 600L, sideBInitialEnergy: Fp.FromInt(100));
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                CreateTestSlotDefProjectile(0, "pa", "da", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(50),
+                    droneRangeMilli: 800L, droneSpeedMilliPerTick: 0L,
+                    droneAttackKind: AttackKind.Projectile,
+                    droneProjectileSpeedMilliPerTick: 300L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 0L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+
+            sim.AdvanceTick(); // Spawn (Tick 1)
+            sim.AdvanceTick(); // Fire (Tick 2)
+
+            bool foundFire = false;
+            foreach (var ev in sim.GetState().RecentEvents)
+            {
+                if (ev.EventType == BattleEventType.ProjectileSpawned)
+                {
+                    foundFire = true;
+                }
+            }
+            if (!foundFire) throw new InvalidOperationException("ProjectileSpawned not found.");
+
+            sim.AdvanceTick(); // Projectile at 300 (Tick 3)
+            sim.AdvanceTick(); // Projectile at 600, hits! (Tick 4)
+
+            bool foundHit = false;
+            bool foundDmg = false;
+            bool foundKb = false;
+            foreach (var ev in sim.GetState().RecentEvents)
+            {
+                if (ev.EventType == BattleEventType.ProjectileHit)
+                {
+                    foundHit = true;
+                    if (ev.SourceEntityId != "e_1")
+                        throw new InvalidOperationException("ProjectileHit SourceEntityId should be e_1. Got: " + ev.SourceEntityId);
+                }
+                if (ev.EventType == BattleEventType.DamageApplied)
+                {
+                    foundDmg = true;
+                    if (ev.SourceEntityId != "e_1")
+                        throw new InvalidOperationException("DamageApplied SourceEntityId should be e_1. Got: " + ev.SourceEntityId);
+                }
+                if (ev.EventType == BattleEventType.KnockbackApplied)
+                {
+                    foundKb = true;
+                    if (ev.SourceEntityId != "e_1")
+                        throw new InvalidOperationException("KnockbackApplied SourceEntityId should be e_1. Got: " + ev.SourceEntityId);
+                }
+            }
+
+            if (!foundHit || !foundDmg || !foundKb)
+                throw new InvalidOperationException("Projectile hit did not emit expected events.");
+        }
+
+        private static void Events_ProjectileMiss_EmitsMissWithoutDamageOrKnockback()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(100), Fp.Zero, laneLengthMilli: 600L, sideBInitialEnergy: Fp.FromInt(100));
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                CreateTestSlotDefProjectile(0, "pa", "da", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(50),
+                    droneRangeMilli: 800L, droneSpeedMilliPerTick: 0L,
+                    droneAttackKind: AttackKind.Projectile,
+                    droneProjectileSpeedMilliPerTick: 300L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 0L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground", BattleSide.SideB)); // deploy pilot for SideB so we can recall it!
+
+            sim.AdvanceTick(); // Spawn (Tick 1)
+            sim.AdvanceTick(); // Fire (Tick 2)
+
+            #pragma warning disable CS8625
+            sim.SubmitCommand(BattleCommand.RecallPilot(2, 0, null, BattleSide.SideB));
+            #pragma warning restore CS8625
+            sim.AdvanceTick(); // Recall & Miss! (Tick 3)
+
+            bool foundMiss = false;
+            foreach (var ev in sim.GetState().RecentEvents)
+            {
+                if (ev.EventType == BattleEventType.ProjectileMiss)
+                {
+                    foundMiss = true;
+                    if (ev.SourceEntityId != "e_1")
+                        throw new InvalidOperationException("ProjectileMiss SourceEntityId should be e_1. Got: " + ev.SourceEntityId);
+                }
+                if (ev.EventType == BattleEventType.DamageApplied || ev.EventType == BattleEventType.KnockbackApplied)
+                    throw new InvalidOperationException("Should not emit damage or knockback on miss.");
+            }
+            if (!foundMiss) throw new InvalidOperationException("ProjectileMiss not emitted.");
+        }
+
+        private static void Events_BaseDamage_EmitsBaseDamagedOnly()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(100), Fp.Zero, laneLengthMilli: 1000L);
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.AdvanceTick(); // Spawn (Tick 1)
+            sim.AdvanceTick(); // Move to 1000 and hit base (Tick 2)
+
+            bool foundBaseDamaged = false;
+            foreach (var ev in sim.GetState().RecentEvents)
+            {
+                if (ev.EventType == BattleEventType.BaseDamaged)
+                {
+                    foundBaseDamaged = true;
+                    if (ev.SourceSide != BattleSide.SideA)
+                        throw new InvalidOperationException("SourceSide mismatch.");
+                    if (ev.TargetSide != BattleSide.SideB)
+                        throw new InvalidOperationException("TargetSide mismatch.");
+                }
+                if (ev.EventType == BattleEventType.AttackStarted || ev.EventType == BattleEventType.KnockbackApplied)
+                    throw new InvalidOperationException("Base damage should not emit AttackStarted or KnockbackApplied.");
+            }
+            if (!foundBaseDamaged) throw new InvalidOperationException("BaseDamaged not emitted.");
+        }
+
+        private static void Events_EntityDied_EmittedInNumericIdOrder()
+        {
+            LaneDefinition[] lanes = new LaneDefinition[]
+            {
+                new LaneDefinition("lane_a", LaneType.Ground, 400L, 0L),
+                new LaneDefinition("lane_b", LaneType.Ground, 400L, 0L),
+            };
+            BattleSideConfig cfgA = new BattleSideConfig(
+                BattleSide.SideA, Fp.FromInt(1000), Fp.FromInt(100), Fp.FromInt(100), Fp.Zero);
+            BattleSideConfig cfgB = new BattleSideConfig(
+                BattleSide.SideB, Fp.FromInt(1000), Fp.FromInt(100), Fp.FromInt(100), Fp.Zero);
+            BattleConfigSnapshot cfg = new BattleConfigSnapshot(
+                "test", cfgA, cfgB, 200, 100, 50, 3600, lanes);
+
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pa", "da", Fp.FromInt(10), 5,
+                    droneHp: Fp.FromInt(100), droneAttack: Fp.FromInt(100),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 0L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L),
+                CreateTestSlotDef(1, "pa1", "da1", Fp.FromInt(10), 5,
+                    droneHp: Fp.FromInt(100), droneAttack: Fp.FromInt(100),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 0L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 5,
+                    droneHp: Fp.FromInt(10), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 0L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L),
+                CreateTestSlotDef(1, "pb1", "db1", Fp.FromInt(10), 5,
+                    droneHp: Fp.FromInt(10), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 500L, droneSpeedMilliPerTick: 0L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_a", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_a", BattleSide.SideB));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 1, "lane_b", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 1, "lane_b", BattleSide.SideB));
+
+            sim.AdvanceTick(); // Spawn & Combat & Death! (Tick 1)
+
+            var events = sim.GetState().RecentEvents;
+            List<string> deadEntityIds = new List<string>();
+            foreach (var ev in events)
+            {
+                if (ev.EventType == BattleEventType.EntityDied)
+                {
+                    deadEntityIds.Add(ev.EntityId);
+                }
+            }
+
+            if (deadEntityIds.Count != 2)
+                throw new InvalidOperationException(string.Format("Expected 2 deaths, got {0}", deadEntityIds.Count));
+
+            if (deadEntityIds[0] != "e_2" || deadEntityIds[1] != "e_4")
+                throw new InvalidOperationException(string.Format("Incorrect death order: {0}, {1}", deadEntityIds[0], deadEntityIds[1]));
+        }
+
+        private static void Events_BattleEnded_EmitsWinnerAndEndReason()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(100), Fp.Zero, laneLengthMilli: 1000L, sideBBaseHp: Fp.FromInt(10));
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.AdvanceTick(); // Spawn (Tick 1)
+            sim.AdvanceTick(); // Moves 1000, hits base, base destroyed! (Tick 2)
+
+            BattleState state = sim.GetState();
+            if (!state.IsTerminated) throw new InvalidOperationException("Should be terminated.");
+
+            bool foundEnd = false;
+            foreach (var ev in state.RecentEvents)
+            {
+                if (ev.EventType == BattleEventType.BattleEnded)
+                {
+                    foundEnd = true;
+                    if (ev.WinnerSide != BattleSide.SideA)
+                        throw new InvalidOperationException("WinnerSide mismatch.");
+                    if (ev.EndReason != BattleEndReason.SideBBaseDestroyed)
+                        throw new InvalidOperationException("EndReason mismatch.");
+                }
+            }
+            if (!foundEnd) throw new InvalidOperationException("BattleEnded not emitted.");
         }
     }
 }

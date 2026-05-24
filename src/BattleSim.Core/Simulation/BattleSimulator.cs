@@ -6,6 +6,7 @@ using BattleSim.Core.FixedPoint;
 using BattleSim.Core.Results;
 using BattleSim.Core.Rng;
 using BattleSim.Core.State;
+using BattleSim.Core.Events;
 
 namespace BattleSim.Core.Simulation
 {
@@ -56,6 +57,10 @@ namespace BattleSim.Core.Simulation
         private readonly List<RuntimeProjectile> _projectiles;
         private int _nextProjectileId;
 
+        // Events collection
+        private readonly List<BattleEvent> _tickEvents;
+        private int _eventTick;
+
         public BattleSimulator(BattleConfigSnapshot config, BattleInitialState initial)
         {
             if (config == null) throw new ArgumentNullException("config");
@@ -71,6 +76,8 @@ namespace BattleSim.Core.Simulation
             _nextEntityId = 1;
             _projectiles = new List<RuntimeProjectile>();
             _nextProjectileId = 1;
+            _tickEvents = new List<BattleEvent>();
+            _eventTick = 0;
 
             _sideA = BuildSideState(config.SideA, initial.SideA);
             _sideB = BuildSideState(config.SideB, initial.SideB);
@@ -117,6 +124,9 @@ namespace BattleSim.Core.Simulation
         {
             if (_isTerminated)
                 throw new InvalidOperationException("Cannot advance tick after termination.");
+
+            _tickEvents.Clear();
+            _eventTick = _currentTick + 1;
 
             // 1. Apply pending commands.
             foreach (BattleCommand cmd in _pendingCommands)
@@ -190,7 +200,7 @@ namespace BattleSim.Core.Simulation
                     p.PositionMilli, p.ImpactProgressMilli, p.Damage, p.RemainingTtlTick));
             }
 
-            return new BattleState(_currentTick, _isTerminated, _endReason, sides, lanes, projSnapshots);
+            return new BattleState(_currentTick, _isTerminated, _endReason, sides, lanes, projSnapshots, _tickEvents.ToArray());
         }
 
         private static BattleSideState BuildSideSnapshot(RuntimeSideState side)
@@ -254,10 +264,19 @@ namespace BattleSim.Core.Simulation
             slot.DroneCooldownTick = def.CooldownTick;
 
             long startPos = cmd.Side == BattleSide.SideA ? 0L : GetLaneLengthMilli(cmd.LaneId);
-            _entities.Add(CreateEntity(cmd.LaneId, cmd.Side,
+            RuntimeEntity entity = CreateEntity(cmd.LaneId, cmd.Side,
                 def.DroneHp, def.DroneAttack, def.DroneDefense, def.DroneRangeMilli, def.DroneSpeedMilliPerTick, def.DroneAttackPeriodTick,
                 def.DroneAttackKind, def.DroneProjectileSpeedMilliPerTick,
-                startPosition: startPos, slotIndex: -1));
+                startPosition: startPos, slotIndex: -1);
+            _entities.Add(entity);
+
+            EmitEvent(
+                eventType: BattleEventType.EntitySpawned,
+                entityId: entity.EntityId,
+                laneId: entity.LaneId,
+                sourceSide: entity.Owner,
+                positionMilli: entity.PositionMilli
+            );
         }
 
         private void ApplyDeployPilot(BattleCommand cmd)
@@ -290,6 +309,14 @@ namespace BattleSim.Core.Simulation
 
             slot.IsPilotDeployed = true;
             slot.PilotEntity = pilot;
+
+            EmitEvent(
+                eventType: BattleEventType.EntitySpawned,
+                entityId: pilot.EntityId,
+                laneId: pilot.LaneId,
+                sourceSide: pilot.Owner,
+                positionMilli: pilot.PositionMilli
+            );
         }
 
         private void ApplyRecallPilot(BattleCommand cmd)
@@ -304,7 +331,15 @@ namespace BattleSim.Core.Simulation
 
             if (slot.PilotEntity != null)
             {
-                _entities.Remove(slot.PilotEntity);
+                RuntimeEntity pilot = slot.PilotEntity;
+                EmitEvent(
+                    eventType: BattleEventType.EntityRemoved,
+                    entityId: pilot.EntityId,
+                    laneId: pilot.LaneId,
+                    sourceSide: pilot.Owner,
+                    positionMilli: pilot.PositionMilli
+                );
+                _entities.Remove(pilot);
                 slot.PilotEntity = null;
             }
             slot.IsPilotDeployed = false;
@@ -325,6 +360,13 @@ namespace BattleSim.Core.Simulation
                 if (p.RemainingTtlTick <= 0)
                 {
                     _projectiles.Remove(p);
+                    EmitEvent(
+                        eventType: BattleEventType.ProjectileMiss,
+                        sourceEntityId: p.SourceEntityId,
+                        projectileId: p.ProjectileId,
+                        targetEntityId: p.TargetEntityId,
+                        laneId: p.ProjectileLaneId
+                    );
                     continue;
                 }
 
@@ -332,6 +374,13 @@ namespace BattleSim.Core.Simulation
                 if (target == null || target.Hp <= Fp.Zero)
                 {
                     _projectiles.Remove(p);
+                    EmitEvent(
+                        eventType: BattleEventType.ProjectileMiss,
+                        sourceEntityId: p.SourceEntityId,
+                        projectileId: p.ProjectileId,
+                        targetEntityId: p.TargetEntityId,
+                        laneId: p.ProjectileLaneId
+                    );
                     continue;
                 }
 
@@ -378,8 +427,50 @@ namespace BattleSim.Core.Simulation
                     // Apply damage if target is within hit radius of impact point upon arrival
                     if (Math.Abs(target.PositionMilli - dest) <= BattleCoreDefaults.ProjectileHitRadiusMilli)
                     {
+                        EmitEvent(
+                            eventType: BattleEventType.ProjectileHit,
+                            sourceEntityId: p.SourceEntityId,
+                            projectileId: p.ProjectileId,
+                            targetEntityId: target.EntityId,
+                            laneId: p.ProjectileLaneId,
+                            sourceSide: p.Owner,
+                            targetSide: target.Owner
+                        );
+
+                        EmitEvent(
+                            eventType: BattleEventType.DamageApplied,
+                            sourceEntityId: p.SourceEntityId,
+                            targetEntityId: target.EntityId,
+                            laneId: target.LaneId,
+                            sourceSide: p.Owner,
+                            targetSide: target.Owner,
+                            damageAmount: p.Damage
+                        );
+
+                        long prevTgtPos = target.PositionMilli;
                         target.Hp = target.Hp - p.Damage;
                         ApplyKnockback(target);
+
+                        EmitEvent(
+                            eventType: BattleEventType.KnockbackApplied,
+                            sourceEntityId: p.SourceEntityId,
+                            targetEntityId: target.EntityId,
+                            laneId: target.LaneId,
+                            sourceSide: p.Owner,
+                            targetSide: target.Owner,
+                            positionMilli: target.PositionMilli,
+                            previousPositionMilli: prevTgtPos
+                        );
+                    }
+                    else
+                    {
+                        EmitEvent(
+                            eventType: BattleEventType.ProjectileMiss,
+                            sourceEntityId: p.SourceEntityId,
+                            projectileId: p.ProjectileId,
+                            targetEntityId: p.TargetEntityId,
+                            laneId: p.ProjectileLaneId
+                        );
                     }
                     _projectiles.Remove(p);
                 }
@@ -426,9 +517,40 @@ namespace BattleSim.Core.Simulation
 
                         if (entity.AttackKind == AttackKind.Melee)
                         {
-                            // Melee: deal damage immediately
+                            EmitEvent(
+                                eventType: BattleEventType.AttackStarted,
+                                sourceEntityId: entity.EntityId,
+                                targetEntityId: target.EntityId,
+                                laneId: entity.LaneId,
+                                sourceSide: entity.Owner,
+                                targetSide: target.Owner,
+                                attackKind: AttackKind.Melee
+                            );
+
+                            EmitEvent(
+                                eventType: BattleEventType.DamageApplied,
+                                sourceEntityId: entity.EntityId,
+                                targetEntityId: target.EntityId,
+                                laneId: target.LaneId,
+                                sourceSide: entity.Owner,
+                                targetSide: target.Owner,
+                                damageAmount: finalDamage
+                            );
+
+                            long prevTgtPos = target.PositionMilli;
                             target.Hp = target.Hp - finalDamage;
                             ApplyKnockback(target);
+
+                            EmitEvent(
+                                eventType: BattleEventType.KnockbackApplied,
+                                sourceEntityId: entity.EntityId,
+                                targetEntityId: target.EntityId,
+                                laneId: target.LaneId,
+                                sourceSide: entity.Owner,
+                                targetSide: target.Owner,
+                                positionMilli: target.PositionMilli,
+                                previousPositionMilli: prevTgtPos
+                            );
                         }
                         else if (entity.AttackKind == AttackKind.Projectile)
                         {
@@ -445,6 +567,7 @@ namespace BattleSim.Core.Simulation
                                 NumericId = projNumId,
                                 ProjectileId = "p_" + projNumId,
                                 Owner = entity.Owner,
+                                SourceEntityId = entity.EntityId,
                                 SourceLaneId = entity.LaneId,
                                 ProjectileLaneId = projectileLaneId,
                                 TargetLaneId = target.LaneId,
@@ -457,6 +580,27 @@ namespace BattleSim.Core.Simulation
                                 RemainingTtlTick = BattleCoreDefaults.ProjectileDefaultTtlTick
                             };
                             _projectiles.Add(proj);
+
+                            EmitEvent(
+                                eventType: BattleEventType.AttackStarted,
+                                sourceEntityId: entity.EntityId,
+                                targetEntityId: target.EntityId,
+                                laneId: entity.LaneId,
+                                sourceSide: entity.Owner,
+                                targetSide: target.Owner,
+                                attackKind: AttackKind.Projectile
+                            );
+
+                            EmitEvent(
+                                eventType: BattleEventType.ProjectileSpawned,
+                                sourceEntityId: entity.EntityId,
+                                targetEntityId: target.EntityId,
+                                projectileId: proj.ProjectileId,
+                                laneId: proj.ProjectileLaneId,
+                                sourceSide: entity.Owner,
+                                targetSide: target.Owner,
+                                positionMilli: proj.PositionMilli
+                            );
                         }
 
                         // Reset cooldown.
@@ -476,6 +620,14 @@ namespace BattleSim.Core.Simulation
                         if (entity.PositionMilli >= laneLen)
                         {
                             entity.PositionMilli = laneLen;
+                            EmitEvent(
+                                eventType: BattleEventType.BaseDamaged,
+                                sourceEntityId: entity.EntityId,
+                                laneId: entity.LaneId,
+                                sourceSide: BattleSide.SideA,
+                                targetSide: BattleSide.SideB,
+                                damageAmount: entity.Attack
+                            );
                             _sideB.BaseHp = _sideB.BaseHp - entity.Attack;
                         }
                     }
@@ -485,6 +637,14 @@ namespace BattleSim.Core.Simulation
                         if (entity.PositionMilli <= 0)
                         {
                             entity.PositionMilli = 0;
+                            EmitEvent(
+                                eventType: BattleEventType.BaseDamaged,
+                                sourceEntityId: entity.EntityId,
+                                laneId: entity.LaneId,
+                                sourceSide: BattleSide.SideB,
+                                targetSide: BattleSide.SideA,
+                                damageAmount: entity.Attack
+                            );
                             _sideA.BaseHp = _sideA.BaseHp - entity.Attack;
                         }
                     }
@@ -494,6 +654,29 @@ namespace BattleSim.Core.Simulation
 
         private void RemoveDeadEntities()
         {
+            List<RuntimeEntity> deadEntities = new List<RuntimeEntity>();
+            foreach (RuntimeEntity e in _entities)
+            {
+                if (e.Hp <= Fp.Zero)
+                {
+                    deadEntities.Add(e);
+                }
+            }
+
+            deadEntities.Sort((a, b) => a.NumericId.CompareTo(b.NumericId));
+
+            foreach (RuntimeEntity e in deadEntities)
+            {
+                EmitEvent(
+                    eventType: BattleEventType.EntityDied,
+                    entityId: e.EntityId,
+                    laneId: e.LaneId,
+                    sourceSide: e.Owner,
+                    targetSide: e.Owner,
+                    positionMilli: e.PositionMilli
+                );
+            }
+
             for (int i = _entities.Count - 1; i >= 0; i--)
             {
                 RuntimeEntity e = _entities[i];
@@ -531,6 +714,11 @@ namespace BattleSim.Core.Simulation
                 _isTerminated = true;
                 _result = new BattleResult(BattleSide.SideA, BattleEndReason.SideBBaseDestroyed,
                     _currentTick, sideARatio, Fp.Zero);
+                EmitEvent(
+                    eventType: BattleEventType.BattleEnded,
+                    winnerSide: _result.WinnerSide,
+                    endReason: _result.EndReason
+                );
                 return;
             }
 
@@ -543,6 +731,11 @@ namespace BattleSim.Core.Simulation
                 _isTerminated = true;
                 _result = new BattleResult(BattleSide.SideB, BattleEndReason.SideABaseDestroyed,
                     _currentTick, Fp.Zero, sideBRatio);
+                EmitEvent(
+                    eventType: BattleEventType.BattleEnded,
+                    winnerSide: _result.WinnerSide,
+                    endReason: _result.EndReason
+                );
                 return;
             }
 
@@ -556,6 +749,11 @@ namespace BattleSim.Core.Simulation
                 _isTerminated = true;
                 _result = BattleResult.FromTimeOut(
                     _currentTick, sideARatio, sideBRatio, _config.TimeOutTieWinnerSide);
+                EmitEvent(
+                    eventType: BattleEventType.BattleEnded,
+                    winnerSide: _result.WinnerSide,
+                    endReason: _result.EndReason
+                );
             }
         }
 
@@ -576,6 +774,43 @@ namespace BattleSim.Core.Simulation
                 if (target.PositionMilli > len)
                     target.PositionMilli = len;
             }
+        }
+
+        private void EmitEvent(
+            BattleEventType eventType,
+            string sourceEntityId = null,
+            string targetEntityId = null,
+            string entityId = null,
+            string projectileId = null,
+            string laneId = null,
+            BattleSide sourceSide = BattleSide.None,
+            BattleSide targetSide = BattleSide.None,
+            BattleSide winnerSide = BattleSide.None,
+            Fp? damageAmount = null,
+            long positionMilli = 0,
+            long previousPositionMilli = 0,
+            AttackKind attackKind = AttackKind.Melee,
+            BattleEndReason endReason = BattleEndReason.None)
+        {
+            int seq = _tickEvents.Count;
+            _tickEvents.Add(new BattleEvent(
+                _eventTick,
+                seq,
+                eventType,
+                sourceEntityId,
+                targetEntityId,
+                entityId,
+                projectileId,
+                laneId,
+                sourceSide,
+                targetSide,
+                winnerSide,
+                damageAmount,
+                positionMilli,
+                previousPositionMilli,
+                attackKind,
+                endReason
+            ));
         }
 
         private void GetWorldPosition(RuntimeEntity entity, out long x, out long y)
@@ -771,6 +1006,7 @@ namespace BattleSim.Core.Simulation
             public int NumericId;
             public string ProjectileId = "";
             public BattleSide Owner;
+            public string SourceEntityId = "";
             public string SourceLaneId = "";
             public string ProjectileLaneId = "";
             public string TargetLaneId = "";
