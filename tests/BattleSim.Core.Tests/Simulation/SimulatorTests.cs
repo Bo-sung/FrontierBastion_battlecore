@@ -81,6 +81,14 @@ namespace BattleSim.Core.Tests.Simulation
             Projectile_StateSnapshot_IsReturnedByGetState();
             Projectile_Determinism_SameSetupProducesSameResult();
             SlotDefinition_RejectsUnknownAttackKind();
+
+            // ---- v0.6 tests ----
+            MeleeHit_AppliesKnockback();
+            ProjectileHit_AppliesKnockback();
+            ProjectileMiss_DoesNotApplyKnockback();
+            Knockback_ClampsAtLaneBounds();
+            BaseDamage_DoesNotApplyKnockback();
+            TargetInRange_HoldsPositionWhileAttackCooldown();
         }
 
         // ------------------------------------------------------------------ config / state helpers
@@ -1895,6 +1903,261 @@ namespace BattleSim.Core.Tests.Simulation
                 threw = true;
             }
             if (!threw) throw new InvalidOperationException("SlotDefinition constructor should reject invalid AttackKind.");
+        }
+
+        // ---- v0.6 tests ----
+
+        private static void MeleeHit_AppliesKnockback()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(100), Fp.Zero, laneLengthMilli: 10_000L, sideBInitialEnergy: Fp.FromInt(100));
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pa", "da", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(50),
+                    droneRangeMilli: 2_000L, droneSpeedMilliPerTick: 2000L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 3_000L, droneSpeedMilliPerTick: 2000L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+
+            sim.AdvanceTick(); // Tick 1: A moves to 2000, B moves to 8000.
+            sim.AdvanceTick(); // Tick 2: A moves to 4000, B moves to 6000.
+            sim.AdvanceTick(); // Tick 3: A is at 4000, B is at 6000 (dist 2000 <= range 2000). A attacks B. B knocked back to 6200.
+
+            BattleEntity? target = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideB);
+            if (target == null) throw new InvalidOperationException("Target SideB entity not found");
+            if (target.Hp != Fp.FromInt(150)) throw new InvalidOperationException("Target HP must be 150. Got: " + target.Hp);
+            if (target.PositionMilli != 6200) throw new InvalidOperationException("Target position must be 6200. Got: " + target.PositionMilli);
+        }
+
+        private static void ProjectileHit_AppliesKnockback()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(100), Fp.Zero, laneLengthMilli: 5_000L, sideBInitialEnergy: Fp.FromInt(100));
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                CreateTestSlotDefProjectile(0, "pa", "da", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(50),
+                    droneRangeMilli: 1_500L, droneSpeedMilliPerTick: 1000L,
+                    droneAttackKind: AttackKind.Projectile, droneProjectileSpeedMilliPerTick: 1000L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 1_500L, droneSpeedMilliPerTick: 500L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+
+            for (int i = 0; i < 6; i++)
+            {
+                sim.AdvanceTick();
+            }
+
+            BattleEntity? target = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideB);
+            if (target == null) throw new InvalidOperationException("Target SideB entity not found");
+            if (target.Hp != Fp.FromInt(150)) throw new InvalidOperationException("Target HP must be 150. Got: " + target.Hp);
+            if (target.PositionMilli != 4200) throw new InvalidOperationException("Target position must be 4200. Got: " + target.PositionMilli);
+        }
+
+        private static void ProjectileMiss_DoesNotApplyKnockback()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(100), Fp.Zero, laneLengthMilli: 5_000L, sideBInitialEnergy: Fp.FromInt(100));
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                CreateTestSlotDefProjectile(0, "pa", "da", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(50),
+                    droneRangeMilli: 1_500L, droneSpeedMilliPerTick: 1000L,
+                    droneAttackKind: AttackKind.Projectile, droneProjectileSpeedMilliPerTick: 1000L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 200L, droneSpeedMilliPerTick: 500L, // small range so it keeps moving!
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+
+            sim.AdvanceTick(); // Tick 1: A at 1000, B at 4500
+            sim.AdvanceTick(); // Tick 2: A at 2000, B at 4000
+            sim.AdvanceTick(); // Tick 3: A at 3000, B at 3500
+            sim.AdvanceTick(); // Tick 4: Attack. Spawns projectile at 3000 (dest 3500). A at 3000, B at 3500 (since B saw A at 3000, distance 500 > range 200, B moved from 4000 to 3500).
+            sim.AdvanceTick(); // Tick 5: Projectile arrives at 3500. B moves to 3000 (since dist 500 > range 200). Projectile misses!
+
+            BattleEntity? target = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideB);
+            if (target == null) throw new InvalidOperationException("Target SideB entity not found");
+            if (target.Hp != Fp.FromInt(200)) throw new InvalidOperationException("Target HP must remain 200 on miss. Got: " + target.Hp);
+            if (target.PositionMilli != 3000) throw new InvalidOperationException("Target position must be 3000. Got: " + target.PositionMilli);
+        }
+
+        private static void Knockback_ClampsAtLaneBounds()
+        {
+            // Part 1: SideA clamp at 0
+            {
+                BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(100), Fp.Zero, laneLengthMilli: 1_000L, sideBInitialEnergy: Fp.FromInt(100));
+                BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+                {
+                    CreateTestSlotDef(0, "pa", "da", Fp.FromInt(10), 100,
+                        droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                        droneRangeMilli: 200L, droneSpeedMilliPerTick: 0L,
+                        pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                        pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+                });
+                BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+                {
+                    CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                        droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(50),
+                        droneRangeMilli: 200L, droneSpeedMilliPerTick: 1000L,
+                        pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                        pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+                });
+                BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+                BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+                sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+                sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+
+                sim.AdvanceTick(); // Tick 1: A stays at 0, B moves to 0.
+                sim.AdvanceTick(); // Tick 2: B attacks A. A knocked back towards 0 (-200), clamped to 0.
+
+                BattleEntity? target = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideA);
+                if (target == null) throw new InvalidOperationException("Target SideA entity not found");
+                if (target.PositionMilli != 0) throw new InvalidOperationException("Target position must be clamped to 0. Got: " + target.PositionMilli);
+            }
+
+            // Part 2: SideB clamp at 1000
+            {
+                BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(100), Fp.Zero, laneLengthMilli: 1_000L, sideBInitialEnergy: Fp.FromInt(100));
+                BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+                {
+                    CreateTestSlotDef(0, "pa", "da", Fp.FromInt(10), 100,
+                        droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(50),
+                        droneRangeMilli: 200L, droneSpeedMilliPerTick: 1000L,
+                        pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                        pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+                });
+                BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+                {
+                    CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                        droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                        droneRangeMilli: 200L, droneSpeedMilliPerTick: 0L,
+                        pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                        pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+                });
+                BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+                BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+                sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+                sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+
+                sim.AdvanceTick(); // Tick 1: A moves to 1000, B stays at 1000.
+                sim.AdvanceTick(); // Tick 2: A attacks B. B knocked back towards 1000 (+200), clamped to 1000.
+
+                BattleEntity? target = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideB);
+                if (target == null) throw new InvalidOperationException("Target SideB entity not found");
+                if (target.PositionMilli != 1000) throw new InvalidOperationException("Target position must be clamped to 1000. Got: " + target.PositionMilli);
+            }
+        }
+
+        private static void BaseDamage_DoesNotApplyKnockback()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(100), Fp.Zero, laneLengthMilli: 1_000L);
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pa", "da", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(50),
+                    droneRangeMilli: 200L, droneSpeedMilliPerTick: 1000L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 200L, droneSpeedMilliPerTick: 300L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+
+            sim.AdvanceTick(); // Tick 1: A moves to 1000, hits Base.
+
+            BattleState state = sim.GetState();
+            BattleEntity? drone = FindByOwner(state, "lane_ground", BattleSide.SideA);
+            if (drone == null) throw new InvalidOperationException("Drone not found");
+            if (drone.PositionMilli != 1000) throw new InvalidOperationException("Drone should be at base wall (1000). Got: " + drone.PositionMilli);
+
+            Fp baseHpB = GetSideState(state, BattleSide.SideB).BaseHp;
+            if (baseHpB != Fp.FromInt(950)) throw new InvalidOperationException("Base HP B must be 950. Got: " + baseHpB);
+        }
+
+        private static void TargetInRange_HoldsPositionWhileAttackCooldown()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(100), Fp.Zero, laneLengthMilli: 2_000L, sideBInitialEnergy: Fp.FromInt(100));
+            BattleSideInitialState sideA = new BattleSideInitialState(BattleSide.SideA, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pa", "da", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(50),
+                    droneRangeMilli: 1000L, droneSpeedMilliPerTick: 500L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(20),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L,
+                    droneAttackPeriodTick: 5)
+            });
+            BattleSideInitialState sideB = new BattleSideInitialState(BattleSide.SideB, new SlotDefinition[]
+            {
+                CreateTestSlotDef(0, "pb", "db", Fp.FromInt(10), 100,
+                    droneHp: Fp.FromInt(200), droneAttack: Fp.FromInt(0),
+                    droneRangeMilli: 200L, droneSpeedMilliPerTick: 0L,
+                    pilotHp: Fp.FromInt(200), pilotAttack: Fp.FromInt(0),
+                    pilotRangeMilli: 1_500L, pilotSpeedMilliPerTick: 300L)
+            });
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, sideA, sideB);
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(0, 0, "lane_ground", BattleSide.SideB));
+
+            sim.AdvanceTick(); // Tick 1: A moves to 500, B stays at 2000
+            sim.AdvanceTick(); // Tick 2: A moves to 1000, B stays at 2000
+            sim.AdvanceTick(); // Tick 3: A attacks B. B hit, knocked back (clamped to 2000). A nextAttackReadyTick = 8.
+
+            // At Tick 4, current tick is 4. Target is at 2000, which is in range (distance 1000 <= range 1000).
+            // A is on cooldown (4 < 8). A holds position.
+            sim.AdvanceTick(); // Tick 4: combat phase resolves.
+
+            BattleEntity? droneA = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideA);
+            if (droneA == null) throw new InvalidOperationException("Drone A not found");
+            if (droneA.PositionMilli != 1000) throw new InvalidOperationException("Drone A should hold position at 1000. Got: " + droneA.PositionMilli);
         }
     }
 }

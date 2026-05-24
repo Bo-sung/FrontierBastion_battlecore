@@ -379,6 +379,7 @@ namespace BattleSim.Core.Simulation
                     if (Math.Abs(target.PositionMilli - dest) <= BattleCoreDefaults.ProjectileHitRadiusMilli)
                     {
                         target.Hp = target.Hp - p.Damage;
+                        ApplyKnockback(target);
                     }
                     _projectiles.Remove(p);
                 }
@@ -427,6 +428,7 @@ namespace BattleSim.Core.Simulation
                         {
                             // Melee: deal damage immediately
                             target.Hp = target.Hp - finalDamage;
+                            ApplyKnockback(target);
                         }
                         else if (entity.AttackKind == AttackKind.Projectile)
                         {
@@ -558,6 +560,23 @@ namespace BattleSim.Core.Simulation
         }
 
         // ------------------------------------------------------------------ combat helpers
+
+        private void ApplyKnockback(RuntimeEntity target)
+        {
+            long len = FindLaneDefinition(target.LaneId).LaneLengthMilli;
+            if (target.Owner == BattleSide.SideA)
+            {
+                target.PositionMilli -= BattleCoreDefaults.KnockbackDistanceMilli;
+                if (target.PositionMilli < 0)
+                    target.PositionMilli = 0;
+            }
+            else
+            {
+                target.PositionMilli += BattleCoreDefaults.KnockbackDistanceMilli;
+                if (target.PositionMilli > len)
+                    target.PositionMilli = len;
+            }
+        }
 
         private void GetWorldPosition(RuntimeEntity entity, out long x, out long y)
         {

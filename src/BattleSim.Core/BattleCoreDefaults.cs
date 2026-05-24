@@ -8,5 +8,6 @@ namespace BattleSim.Core
         public const long MinDamageRaw = FixedPointScale;
         public const long ProjectileHitRadiusMilli = 100;
         public const int ProjectileDefaultTtlTick = 200;
+        public const long KnockbackDistanceMilli = 200;
     }
 }
