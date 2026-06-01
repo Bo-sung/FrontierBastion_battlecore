@@ -102,6 +102,24 @@ namespace BattleSim.Core.Tests.Simulation
             Events_BaseDamage_EmitsBaseDamagedOnly();
             Events_EntityDied_EmittedInNumericIdOrder();
             Events_BattleEnded_EmitsWinnerAndEndReason();
+
+            // ---- v0.8 tests ----
+            Support_StartResourceUpgrade_ConsumesEnergyAndPausesRegen();
+            Support_RejectsSecondUpgradeWhileActive();
+            Support_RejectsUpgradeAtMaxLevel();
+            Support_RejectsWhenEnergyInsufficient();
+            Support_ResourceUpgrade_CompletesAndUpdatesLevel();
+            Support_ResourceUpgrade_UsesAbsoluteMaxEnergy();
+            Support_ResourceUpgrade_AppliesRegenBonusAfterCompletion();
+            Support_RegenResumesNextTickAfterCompletion();
+            Support_StartPilotUpgrade_BlocksDeployPilot();
+            Support_PilotUpgrade_AllowsSpawnAndRecall();
+            Support_PilotUpgrade_CompletesAndBuffsFuturePilotOnly();
+            Support_PilotUpgrade_DoesNotRetroactivelyBuffDeployedPilot();
+            Support_PilotUpgrade_DoesNotBuffDrone();
+            Support_Events_StartedAndCompleted();
+            Support_StateSnapshot_ContainsLevelsAndActiveState();
+            Support_RejectsUnknownSupportTrack();
         }
 
         // ------------------------------------------------------------------ config / state helpers
@@ -2566,6 +2584,374 @@ namespace BattleSim.Core.Tests.Simulation
                 }
             }
             if (!foundEnd) throw new InvalidOperationException("BattleEnded not emitted.");
+        }
+
+        private static void Support_StartResourceUpgrade_ConsumesEnergyAndPausesRegen()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(200), Fp.FromInt(1));
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Resource));
+            sim.AdvanceTick();
+
+            BattleState state = sim.GetState();
+            BattleSideState sideA = GetSideState(state, BattleSide.SideA);
+
+            if (sideA.Energy != Fp.Zero)
+                throw new InvalidOperationException("StartSupportUpgrade should consume energy immediately.");
+
+            if (sideA.SupportState.ActiveTrack != BattleSupportTrack.Resource)
+                throw new InvalidOperationException("Active track should be Resource.");
+
+            if (!sideA.SupportState.IsEnergyRegenPaused)
+                throw new InvalidOperationException("Energy regen should be paused.");
+        }
+
+        private static void Support_RejectsSecondUpgradeWhileActive()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(200), Fp.FromInt(300), Fp.Zero);
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Resource));
+            sim.AdvanceTick();
+
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(1, BattleSide.SideA, BattleSupportTrack.Pilot));
+            bool threw = false;
+            try
+            {
+                sim.AdvanceTick();
+            }
+            catch (InvalidOperationException)
+            {
+                threw = true;
+            }
+            if (!threw) throw new InvalidOperationException("Should reject second upgrade while one is active.");
+        }
+
+        private static void Support_RejectsUpgradeAtMaxLevel()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(1000), Fp.FromInt(1000), Fp.FromInt(1000));
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+
+            for (int l = 1; l <= 5; l++)
+            {
+                sim.SubmitCommand(BattleCommand.StartSupportUpgrade(sim.CurrentTick, BattleSide.SideA, BattleSupportTrack.Resource));
+                int duration = 400 + 100 * l;
+                for (int t = 0; t < duration; t++)
+                {
+                    sim.AdvanceTick();
+                }
+                sim.AdvanceTick();
+            }
+
+            BattleSideState sideA = GetSideState(sim.GetState(), BattleSide.SideA);
+            if (sideA.SupportState.ResourceLevel != 5)
+                throw new InvalidOperationException("Resource level should be 5. Got: " + sideA.SupportState.ResourceLevel);
+
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(sim.CurrentTick, BattleSide.SideA, BattleSupportTrack.Resource));
+            bool threw = false;
+            try
+            {
+                sim.AdvanceTick();
+            }
+            catch (InvalidOperationException)
+            {
+                threw = true;
+            }
+            if (!threw) throw new InvalidOperationException("Should reject upgrade when level is already 5.");
+        }
+
+        private static void Support_RejectsWhenEnergyInsufficient()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(50), Fp.FromInt(200), Fp.Zero);
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Resource));
+            bool threw = false;
+            try
+            {
+                sim.AdvanceTick();
+            }
+            catch (InvalidOperationException)
+            {
+                threw = true;
+            }
+            if (!threw) throw new InvalidOperationException("Should reject upgrade when energy is insufficient.");
+        }
+
+        private static void Support_ResourceUpgrade_CompletesAndUpdatesLevel()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(200), Fp.Zero);
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Resource));
+
+            for (int i = 0; i < 500; i++)
+            {
+                sim.AdvanceTick();
+            }
+
+            BattleSideState sideA = GetSideState(sim.GetState(), BattleSide.SideA);
+            if (sideA.SupportState.ResourceLevel != 1)
+                throw new InvalidOperationException("Resource level should be 1 upon completion.");
+            if (sideA.SupportState.IsActive)
+                throw new InvalidOperationException("Upgrade should not be active after completion.");
+        }
+
+        private static void Support_ResourceUpgrade_UsesAbsoluteMaxEnergy()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(200), Fp.FromInt(1000));
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Resource));
+            for (int i = 0; i < 500; i++) sim.AdvanceTick();
+
+            if (GetSideState(sim.GetState(), BattleSide.SideA).Energy != Fp.Zero)
+                throw new InvalidOperationException("Energy must be zero at completion tick.");
+
+            sim.AdvanceTick();
+            Fp energy = GetSideState(sim.GetState(), BattleSide.SideA).Energy;
+            if (energy != Fp.FromInt(110))
+                throw new InvalidOperationException("Energy should clamp at absolute MaxEnergy (110). Got: " + energy);
+        }
+
+        private static void Support_ResourceUpgrade_AppliesRegenBonusAfterCompletion()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(200), Fp.FromInt(10));
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Resource));
+            for (int i = 0; i < 500; i++) sim.AdvanceTick();
+
+            sim.AdvanceTick();
+            Fp energy = GetSideState(sim.GetState(), BattleSide.SideA).Energy;
+            if (energy != Fp.FromInt(11))
+                throw new InvalidOperationException("Regen at level 1 should be 11. Got: " + energy);
+        }
+
+        private static void Support_RegenResumesNextTickAfterCompletion()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(200), Fp.FromInt(10));
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Resource));
+            for (int i = 0; i < 500; i++) sim.AdvanceTick();
+
+            Fp energy500 = GetSideState(sim.GetState(), BattleSide.SideA).Energy;
+            if (energy500 != Fp.Zero)
+                throw new InvalidOperationException("Regen must NOT apply on completion tick.");
+
+            sim.AdvanceTick();
+            Fp energy501 = GetSideState(sim.GetState(), BattleSide.SideA).Energy;
+            if (energy501 != Fp.FromInt(11))
+                throw new InvalidOperationException("Regen should resume on the next tick.");
+        }
+
+        private static void Support_StartPilotUpgrade_BlocksDeployPilot()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(200), Fp.Zero);
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Pilot));
+            sim.AdvanceTick();
+
+            sim.SubmitCommand(BattleCommand.DeployPilot(1, 0, "lane_ground", BattleSide.SideA));
+            bool threw = false;
+            try
+            {
+                sim.AdvanceTick();
+            }
+            catch (InvalidOperationException)
+            {
+                threw = true;
+            }
+            if (!threw) throw new InvalidOperationException("DeployPilot should be rejected during active pilot upgrade.");
+        }
+
+        private static void Support_PilotUpgrade_AllowsSpawnAndRecall()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(200), Fp.FromInt(300), Fp.Zero, laneLengthMilli: 1_000_000L);
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+
+            // 1. Start Pilot upgrade
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Pilot));
+            sim.AdvanceTick();
+
+            // 2. Spawn Drone during active upgrade - should be allowed!
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(1, 0, "lane_ground", BattleSide.SideA));
+            sim.AdvanceTick();
+
+            // Advance until Level 1 completes (duration = 500)
+            for (int i = 0; i < 498; i++) sim.AdvanceTick();
+
+            // Level 1 complete. Deploy Pilot.
+            sim.SubmitCommand(BattleCommand.DeployPilot(500, 0, "lane_ground", BattleSide.SideA));
+            sim.AdvanceTick();
+
+            // 3. Start Level 2 Pilot upgrade (cost = 60). Remaining energy = 140.
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(501, BattleSide.SideA, BattleSupportTrack.Pilot));
+            sim.AdvanceTick();
+
+            // 4. Recall Pilot during active upgrade - should be allowed!
+#pragma warning disable CS8625
+            sim.SubmitCommand(BattleCommand.RecallPilot(502, 0, null, BattleSide.SideA));
+#pragma warning restore CS8625
+            sim.AdvanceTick();
+        }
+
+        private static void Support_PilotUpgrade_CompletesAndBuffsFuturePilotOnly()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(200), Fp.Zero);
+            BattleSideInitialState initA = DefaultSideInitialState(BattleSide.SideA);
+            BattleInitialState initial = new BattleInitialState("stage_1", 42L, initA, DefaultSideInitialState(BattleSide.SideB));
+            BattleSimulator sim = new BattleSimulator(cfg, initial);
+
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Pilot));
+            for (int i = 0; i < 500; i++) sim.AdvanceTick();
+
+            sim.SubmitCommand(BattleCommand.DeployPilot(500, 0, "lane_ground", BattleSide.SideA));
+            sim.AdvanceTick();
+
+            BattleEntity? pilot = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideA);
+            if (pilot == null) throw new InvalidOperationException("Pilot entity not found.");
+
+            if (pilot.Hp != Fp.FromInt(220))
+                throw new InvalidOperationException("Pilot HP should be buffed to 220. Got: " + pilot.Hp);
+        }
+
+        private static void Support_PilotUpgrade_DoesNotRetroactivelyBuffDeployedPilot()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(200), Fp.Zero, laneLengthMilli: 1_000_000L);
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+
+            sim.SubmitCommand(BattleCommand.DeployPilot(0, 0, "lane_ground", BattleSide.SideA));
+            sim.AdvanceTick();
+
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(1, BattleSide.SideA, BattleSupportTrack.Pilot));
+            for (int i = 0; i < 500; i++) sim.AdvanceTick();
+
+            BattleEntity? pilot = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideA);
+            if (pilot == null) throw new InvalidOperationException("Pilot not found.");
+            if (pilot.Hp != Fp.FromInt(200))
+                throw new InvalidOperationException("Deployed pilot should not be retroactively buffed.");
+        }
+
+        private static void Support_PilotUpgrade_DoesNotBuffDrone()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(200), Fp.Zero);
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Pilot));
+            for (int i = 0; i < 500; i++) sim.AdvanceTick();
+
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(500, 0, "lane_ground", BattleSide.SideA));
+            sim.AdvanceTick();
+
+            BattleEntity? drone = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideA);
+            if (drone == null) throw new InvalidOperationException("Drone not found.");
+            if (drone.Hp != Fp.FromInt(100))
+                throw new InvalidOperationException("Drone should not be buffed by pilot upgrade. Hp: " + drone.Hp);
+        }
+
+        private static void Support_Events_StartedAndCompleted()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(200), Fp.Zero);
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Resource));
+            sim.AdvanceTick();
+
+            BattleState state1 = sim.GetState();
+            bool foundStarted = false;
+            foreach (var ev in state1.RecentEvents)
+            {
+                if (ev.EventType == BattleEventType.SupportUpgradeStarted)
+                {
+                    foundStarted = true;
+                    if (ev.SourceSide != BattleSide.SideA) throw new InvalidOperationException("Event SourceSide mismatch.");
+                    if (ev.SupportTrack != BattleSupportTrack.Resource) throw new InvalidOperationException("Event SupportTrack mismatch.");
+                    if (ev.SupportLevel != 1) throw new InvalidOperationException("Event SupportLevel mismatch.");
+                }
+            }
+            if (!foundStarted) throw new InvalidOperationException("SupportUpgradeStarted event not found.");
+
+            for (int i = 0; i < 499; i++) sim.AdvanceTick();
+
+            BattleState state2 = sim.GetState();
+            bool foundCompleted = false;
+            foreach (var ev in state2.RecentEvents)
+            {
+                if (ev.EventType == BattleEventType.SupportUpgradeCompleted)
+                {
+                    foundCompleted = true;
+                    if (ev.SourceSide != BattleSide.SideA) throw new InvalidOperationException("Event SourceSide mismatch.");
+                    if (ev.SupportTrack != BattleSupportTrack.Resource) throw new InvalidOperationException("Event SupportTrack mismatch.");
+                    if (ev.SupportLevel != 1) throw new InvalidOperationException("Event SupportLevel mismatch.");
+                }
+            }
+            if (!foundCompleted) throw new InvalidOperationException("SupportUpgradeCompleted event not found.");
+        }
+
+        private static void Support_StateSnapshot_ContainsLevelsAndActiveState()
+        {
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(200), Fp.Zero);
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Resource));
+            sim.AdvanceTick();
+
+            BattleSideState ss = GetSideState(sim.GetState(), BattleSide.SideA);
+            if (ss.SupportState == null) throw new InvalidOperationException("SupportState snapshot is null.");
+            if (ss.SupportState.Side != BattleSide.SideA) throw new InvalidOperationException("Snapshot side mismatch.");
+            if (ss.SupportState.ResourceLevel != 0) throw new InvalidOperationException("ResourceLevel mismatch during active.");
+            if (ss.SupportState.ActiveTrack != BattleSupportTrack.Resource) throw new InvalidOperationException("ActiveTrack mismatch.");
+            if (ss.SupportState.ActiveTargetLevel != 1) throw new InvalidOperationException("ActiveTargetLevel mismatch.");
+            if (ss.SupportState.RemainingTick != 499) throw new InvalidOperationException("RemainingTick mismatch. Got: " + ss.SupportState.RemainingTick);
+            if (!ss.SupportState.IsActive) throw new InvalidOperationException("IsActive mismatch.");
+            if (!ss.SupportState.IsEnergyRegenPaused) throw new InvalidOperationException("IsEnergyRegenPaused mismatch.");
+            if (ss.SupportState.IsPilotDeployBlocked) throw new InvalidOperationException("IsPilotDeployBlocked mismatch.");
+        }
+
+        private static void Support_RejectsUnknownSupportTrack()
+        {
+            bool factoryThrew = false;
+            try
+            {
+                BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, (BattleSupportTrack)999);
+            }
+            catch (ArgumentException)
+            {
+                factoryThrew = true;
+            }
+            if (!factoryThrew) throw new InvalidOperationException("StartSupportUpgrade factory should throw ArgumentException for undefined supportTrack.");
+
+            var ctor = typeof(BattleCommand).GetConstructor(
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance,
+                null,
+                new Type[] { typeof(int), typeof(BattleSide), typeof(int), typeof(string), typeof(BattleCommandType), typeof(BattleSupportTrack) },
+                null
+            );
+            if (ctor == null) throw new InvalidOperationException("Private constructor not found via reflection.");
+
+#pragma warning disable CS8625
+            BattleCommand invalidCmd = (BattleCommand)ctor.Invoke(new object[] { 0, BattleSide.SideA, -1, null, BattleCommandType.StartSupportUpgrade, (BattleSupportTrack)999 });
+#pragma warning restore CS8625
+
+            BattleConfigSnapshot cfg = MakeConfig(Fp.FromInt(100), Fp.FromInt(200), Fp.Zero);
+            BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
+
+            sim.SubmitCommand(invalidCmd);
+
+            bool simulatorThrew = false;
+            try
+            {
+                sim.AdvanceTick();
+            }
+            catch (ArgumentException)
+            {
+                simulatorThrew = true;
+            }
+            if (!simulatorThrew) throw new InvalidOperationException("Simulator stage should throw ArgumentException for undefined supportTrack.");
         }
     }
 }

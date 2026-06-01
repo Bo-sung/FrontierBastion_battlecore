@@ -2,6 +2,7 @@ using BattleSim.Core.FixedPoint;
 using BattleSim.Core.Results;
 using BattleSim.Core.Config;
 using BattleSim.Core.State;
+using BattleSim.Core.Commands;
 
 namespace BattleSim.Core.Events
 {
@@ -33,6 +34,11 @@ namespace BattleSim.Core.Events
         public AttackKind AttackKind { get; }
         public BattleEndReason EndReason { get; }
 
+        // Support tracks (v0.8)
+        public BattleSupportTrack SupportTrack { get; }
+        public int SupportLevel { get; }
+
+#pragma warning disable CS8625
         public BattleEvent(
             int tick,
             int sequence,
@@ -49,7 +55,10 @@ namespace BattleSim.Core.Events
             long positionMilli = 0,
             long previousPositionMilli = 0,
             AttackKind attackKind = AttackKind.Melee,
-            BattleEndReason endReason = BattleEndReason.None)
+            BattleEndReason endReason = BattleEndReason.None,
+            BattleSupportTrack supportTrack = BattleSupportTrack.None,
+            int supportLevel = 0)
+#pragma warning restore CS8625
         {
             Tick = tick;
             Sequence = sequence;
@@ -67,6 +76,8 @@ namespace BattleSim.Core.Events
             PreviousPositionMilli = previousPositionMilli;
             AttackKind = attackKind;
             EndReason = endReason;
+            SupportTrack = supportTrack;
+            SupportLevel = supportLevel;
         }
     }
 }

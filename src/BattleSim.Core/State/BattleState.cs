@@ -70,13 +70,20 @@ namespace BattleSim.Core.State
         public Fp BaseHp { get; private set; }
         public Fp Energy { get; private set; }
         public IReadOnlyList<SlotState> Slots { get; private set; }
+        public BattleSideSupportState SupportState { get; private set; }
 
         public BattleSideState(BattleSide side, Fp baseHp, Fp energy, IReadOnlyList<SlotState> slots)
+            : this(side, baseHp, energy, slots, new BattleSideSupportState(side, 0, 0, Commands.BattleSupportTrack.None, 0, 0, false, false, false))
+        {
+        }
+
+        public BattleSideState(BattleSide side, Fp baseHp, Fp energy, IReadOnlyList<SlotState> slots, BattleSideSupportState supportState)
         {
             Side = side;
             BaseHp = baseHp;
             Energy = energy;
             Slots = slots;
+            SupportState = supportState;
         }
     }
 

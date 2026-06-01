@@ -15,6 +15,8 @@ namespace BattleSim.Core.Events
         EntityDied = 8,
         BaseDamaged = 9,
         BattleEnded = 10,
-        EntityRemoved = 11
+        EntityRemoved = 11,
+        SupportUpgradeStarted = 12,
+        SupportUpgradeCompleted = 13
     }
 }

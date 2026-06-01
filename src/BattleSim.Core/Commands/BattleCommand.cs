@@ -24,14 +24,16 @@ namespace BattleSim.Core.Commands
         public int SlotIndex { get; private set; }
         public string LaneId { get; private set; }
         public BattleCommandType CommandType { get; private set; }
+        public BattleSupportTrack SupportTrack { get; private set; }
 
-        private BattleCommand(int tick, BattleSide side, int slotIndex, string laneId, BattleCommandType commandType)
+        private BattleCommand(int tick, BattleSide side, int slotIndex, string laneId, BattleCommandType commandType, BattleSupportTrack supportTrack)
         {
             Tick = tick;
             Side = side;
             SlotIndex = slotIndex;
             LaneId = laneId;
             CommandType = commandType;
+            SupportTrack = supportTrack;
         }
 
         public static BattleCommand SpawnDroneSquad(int tick, int slotIndex, string laneId, BattleSide side)
@@ -40,7 +42,7 @@ namespace BattleSim.Core.Commands
                 throw new ArgumentException("SpawnDroneSquad requires laneId.", "laneId");
             if (side == BattleSide.None)
                 throw new ArgumentException("SpawnDroneSquad requires a valid side.", "side");
-            return new BattleCommand(tick, side, slotIndex, laneId, BattleCommandType.SpawnDroneSquad);
+            return new BattleCommand(tick, side, slotIndex, laneId, BattleCommandType.SpawnDroneSquad, BattleSupportTrack.None);
         }
 
         public static BattleCommand DeployPilot(int tick, int slotIndex, string laneId, BattleSide side)
@@ -49,7 +51,7 @@ namespace BattleSim.Core.Commands
                 throw new ArgumentException("DeployPilot requires laneId.", "laneId");
             if (side == BattleSide.None)
                 throw new ArgumentException("DeployPilot requires a valid side.", "side");
-            return new BattleCommand(tick, side, slotIndex, laneId, BattleCommandType.DeployPilot);
+            return new BattleCommand(tick, side, slotIndex, laneId, BattleCommandType.DeployPilot, BattleSupportTrack.None);
         }
 
         /// <summary>
@@ -59,7 +61,18 @@ namespace BattleSim.Core.Commands
         {
             if (side == BattleSide.None)
                 throw new ArgumentException("RecallPilot requires a valid side.", "side");
-            return new BattleCommand(tick, side, slotIndex, laneId, BattleCommandType.RecallPilot);
+            return new BattleCommand(tick, side, slotIndex, laneId, BattleCommandType.RecallPilot, BattleSupportTrack.None);
+        }
+
+        public static BattleCommand StartSupportUpgrade(int tick, BattleSide side, BattleSupportTrack supportTrack)
+        {
+            if (side == BattleSide.None)
+                throw new ArgumentException("StartSupportUpgrade requires a valid side.", "side");
+            if (supportTrack != BattleSupportTrack.Resource && supportTrack != BattleSupportTrack.Pilot)
+                throw new ArgumentException("StartSupportUpgrade requires a valid supportTrack (Resource or Pilot).", "supportTrack");
+#pragma warning disable CS8625
+            return new BattleCommand(tick, side, -1, null, BattleCommandType.StartSupportUpgrade, supportTrack);
+#pragma warning restore CS8625
         }
     }
 }

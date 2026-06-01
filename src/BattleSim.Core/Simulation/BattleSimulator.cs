@@ -137,6 +137,9 @@ namespace BattleSim.Core.Simulation
             RegenEnergy(_sideA);
             RegenEnergy(_sideB);
 
+            // 2.5. Support progress processing.
+            UpdateSupportUpgrades();
+
             // 3. Decay slot cooldowns toward zero.
             DecayCooldowns(_sideA);
             DecayCooldowns(_sideB);
@@ -159,6 +162,10 @@ namespace BattleSim.Core.Simulation
 
         private static void RegenEnergy(RuntimeSideState side)
         {
+            if (side.ActiveTrack != BattleSupportTrack.None)
+            {
+                return;
+            }
             Fp regenned = side.Energy + side.EnergyRegenPerTick;
             side.Energy = regenned > side.MaxEnergy ? side.MaxEnergy : regenned;
         }
@@ -212,7 +219,24 @@ namespace BattleSim.Core.Simulation
                 slots[i] = new SlotState(s.SlotIndex, s.IsPilotDeployed, s.IsPilotKnockedOut,
                     s.DroneCooldownTick, s.PilotCooldownTick);
             }
-            return new BattleSideState(side.Side, side.BaseHp, side.Energy, slots);
+
+            bool isActive = side.ActiveTrack != BattleSupportTrack.None;
+            bool isEnergyRegenPaused = isActive;
+            bool isPilotDeployBlocked = side.ActiveTrack == BattleSupportTrack.Pilot;
+
+            BattleSideSupportState supportState = new BattleSideSupportState(
+                side.Side,
+                side.ResourceLevel,
+                side.PilotLevel,
+                side.ActiveTrack,
+                side.ActiveTargetLevel,
+                side.RemainingTick,
+                isActive,
+                isEnergyRegenPaused,
+                isPilotDeployBlocked
+            );
+
+            return new BattleSideState(side.Side, side.BaseHp, side.Energy, slots, supportState);
         }
 
         public BattleResult GetResult()
@@ -228,9 +252,10 @@ namespace BattleSim.Core.Simulation
         {
             switch (cmd.CommandType)
             {
-                case BattleCommandType.SpawnDroneSquad: ApplySpawnDroneSquad(cmd); break;
-                case BattleCommandType.DeployPilot:     ApplyDeployPilot(cmd);     break;
-                case BattleCommandType.RecallPilot:     ApplyRecallPilot(cmd);     break;
+                case BattleCommandType.SpawnDroneSquad:   ApplySpawnDroneSquad(cmd);   break;
+                case BattleCommandType.DeployPilot:       ApplyDeployPilot(cmd);       break;
+                case BattleCommandType.RecallPilot:       ApplyRecallPilot(cmd);       break;
+                case BattleCommandType.StartSupportUpgrade: ApplyStartSupportUpgrade(cmd); break;
                 default:
                     throw new ArgumentException("Unknown command type: " + cmd.CommandType, "command");
             }
@@ -285,6 +310,10 @@ namespace BattleSim.Core.Simulation
                 throw new ArgumentException("Lane not found: " + cmd.LaneId, "command");
 
             RuntimeSideState sideState = GetSideState(cmd.Side);
+
+            if (sideState.ActiveTrack == BattleSupportTrack.Pilot)
+                throw new InvalidOperationException("Cannot deploy pilot while pilot support upgrade is active.");
+
             RuntimeSlotState? slot = FindSlotState(sideState, cmd.SlotIndex);
             if (slot == null)
                 throw new ArgumentException("Slot index not found: " + cmd.SlotIndex, "command");
@@ -301,8 +330,21 @@ namespace BattleSim.Core.Simulation
                     "Slot " + cmd.SlotIndex + " pilot is knocked out and cannot deploy.");
 
             long startPos = cmd.Side == BattleSide.SideA ? 0L : GetLaneLengthMilli(cmd.LaneId);
+
+            Fp finalHp = def.PilotHp;
+            Fp finalAttack = def.PilotAttack;
+            Fp finalDefense = def.PilotDefense;
+
+            if (sideState.PilotLevel > 0)
+            {
+                int multiplier = 100 + 10 * sideState.PilotLevel;
+                finalHp = def.PilotHp * multiplier / 100;
+                finalAttack = def.PilotAttack * multiplier / 100;
+                finalDefense = def.PilotDefense * multiplier / 100;
+            }
+
             RuntimeEntity pilot = CreateEntity(cmd.LaneId, cmd.Side,
-                def.PilotHp, def.PilotAttack, def.PilotDefense, def.PilotRangeMilli, def.PilotSpeedMilliPerTick, def.PilotAttackPeriodTick,
+                finalHp, finalAttack, finalDefense, def.PilotRangeMilli, def.PilotSpeedMilliPerTick, def.PilotAttackPeriodTick,
                 def.PilotAttackKind, def.PilotProjectileSpeedMilliPerTick,
                 startPosition: startPos, slotIndex: cmd.SlotIndex);
             _entities.Add(pilot);
@@ -344,6 +386,106 @@ namespace BattleSim.Core.Simulation
             }
             slot.IsPilotDeployed = false;
             slot.PilotCooldownTick = _config.PilotReturnCooldownTick;
+        }
+
+        private void ApplyStartSupportUpgrade(BattleCommand cmd)
+        {
+            RuntimeSideState sideState = GetSideState(cmd.Side);
+
+            if (cmd.SupportTrack != BattleSupportTrack.Resource && cmd.SupportTrack != BattleSupportTrack.Pilot)
+                throw new ArgumentException("StartSupportUpgrade requires a valid supportTrack (Resource or Pilot).", "command");
+
+            if (sideState.ActiveTrack != BattleSupportTrack.None)
+                throw new InvalidOperationException("An upgrade is already active for this side.");
+
+            int currentLevel = cmd.SupportTrack == BattleSupportTrack.Resource ? sideState.ResourceLevel : sideState.PilotLevel;
+            if (currentLevel >= 5)
+                throw new InvalidOperationException("Support track is already at maximum level (5).");
+
+            int targetLevel = currentLevel + 1;
+            int cost = 0;
+            int duration = 0;
+
+            if (cmd.SupportTrack == BattleSupportTrack.Resource)
+            {
+                cost = 100 + 10 * (targetLevel - 1);
+                duration = 400 + 100 * targetLevel;
+            }
+            else if (cmd.SupportTrack == BattleSupportTrack.Pilot)
+            {
+                cost = 50 + 10 * (targetLevel - 1);
+                duration = 400 + 100 * targetLevel;
+            }
+
+            Fp fpCost = Fp.FromInt(cost);
+            if (sideState.Energy < fpCost)
+                throw new InvalidOperationException(
+                    "Insufficient energy: need " + fpCost + ", have " + sideState.Energy + ".");
+
+            sideState.Energy = sideState.Energy - fpCost;
+            sideState.ActiveTrack = cmd.SupportTrack;
+            sideState.ActiveTargetLevel = targetLevel;
+            sideState.RemainingTick = duration;
+
+            EmitEvent(
+                eventType: BattleEventType.SupportUpgradeStarted,
+                sourceSide: cmd.Side,
+                supportTrack: cmd.SupportTrack,
+                supportLevel: targetLevel
+            );
+        }
+
+        private void CompleteSupportUpgrade(RuntimeSideState side)
+        {
+            BattleSupportTrack completedTrack = side.ActiveTrack;
+            int completedLevel = side.ActiveTargetLevel;
+
+            if (completedTrack == BattleSupportTrack.Resource)
+            {
+                side.ResourceLevel = completedLevel;
+                side.MaxEnergy = Fp.FromInt(100 + 10 * completedLevel);
+
+                Fp baseRegen = side.Side == BattleSide.SideA ? _config.SideA.EnergyRegenPerTick : _config.SideB.EnergyRegenPerTick;
+                side.EnergyRegenPerTick = baseRegen * (100 + 10 * completedLevel) / 100;
+
+                if (side.Energy > side.MaxEnergy)
+                {
+                    side.Energy = side.MaxEnergy;
+                }
+            }
+            else if (completedTrack == BattleSupportTrack.Pilot)
+            {
+                side.PilotLevel = completedLevel;
+            }
+
+            side.ActiveTrack = BattleSupportTrack.None;
+            side.ActiveTargetLevel = 0;
+            side.RemainingTick = 0;
+
+            EmitEvent(
+                eventType: BattleEventType.SupportUpgradeCompleted,
+                sourceSide: side.Side,
+                supportTrack: completedTrack,
+                supportLevel: completedLevel
+            );
+        }
+
+        private void UpdateSupportUpgrades()
+        {
+            UpdateSupportUpgradeForSide(_sideA);
+            UpdateSupportUpgradeForSide(_sideB);
+        }
+
+        private void UpdateSupportUpgradeForSide(RuntimeSideState side)
+        {
+            if (side.ActiveTrack != BattleSupportTrack.None)
+            {
+                side.RemainingTick--;
+                if (side.RemainingTick <= 0)
+                {
+                    CompleteSupportUpgrade(side);
+                }
+            }
         }
 
         // ------------------------------------------------------------------ per-tick phases
@@ -776,6 +918,7 @@ namespace BattleSim.Core.Simulation
             }
         }
 
+#pragma warning disable CS8625
         private void EmitEvent(
             BattleEventType eventType,
             string sourceEntityId = null,
@@ -790,7 +933,10 @@ namespace BattleSim.Core.Simulation
             long positionMilli = 0,
             long previousPositionMilli = 0,
             AttackKind attackKind = AttackKind.Melee,
-            BattleEndReason endReason = BattleEndReason.None)
+            BattleEndReason endReason = BattleEndReason.None,
+            BattleSupportTrack supportTrack = BattleSupportTrack.None,
+            int supportLevel = 0)
+#pragma warning restore CS8625
         {
             int seq = _tickEvents.Count;
             _tickEvents.Add(new BattleEvent(
@@ -809,7 +955,9 @@ namespace BattleSim.Core.Simulation
                 positionMilli,
                 previousPositionMilli,
                 attackKind,
-                endReason
+                endReason,
+                supportTrack,
+                supportLevel
             ));
         }
 
@@ -969,6 +1117,13 @@ namespace BattleSim.Core.Simulation
             public Fp MaxEnergy;
             public Fp EnergyRegenPerTick;
             public RuntimeSlotState[] SlotStates = new RuntimeSlotState[0];
+
+            // v0.8 Support Upgrade State
+            public int ResourceLevel = 0;
+            public int PilotLevel = 0;
+            public BattleSupportTrack ActiveTrack = BattleSupportTrack.None;
+            public int ActiveTargetLevel = 0;
+            public int RemainingTick = 0;
         }
 
         private sealed class RuntimeSlotState

@@ -10,5 +10,6 @@ namespace BattleSim.Core.Commands
         SpawnDroneSquad = 1,
         DeployPilot = 2,
         RecallPilot = 3,
+        StartSupportUpgrade = 4,
     }
 }
