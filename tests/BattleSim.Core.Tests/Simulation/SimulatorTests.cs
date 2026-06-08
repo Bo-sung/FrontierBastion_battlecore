@@ -187,9 +187,9 @@ namespace BattleSim.Core.Tests.Simulation
                 configVersion:              "test",
                 sideA:                      cfgA,
                 sideB:                      cfgB,
-                pilotDeployCooldownTick:    200,
-                pilotReturnCooldownTick:    100,
-                pilotKnockoutDroneResumeTick: 50,
+                pilotDeployCooldownTick:    160,
+                pilotReturnCooldownTick:    80,
+                pilotKnockoutDroneResumeTick: 40,
                 maxBattleTick:              maxBattleTick,
                 lanes:                      lanes,
                 timeOutTieWinnerSide:       timeOutTieWinnerSide);
@@ -441,13 +441,13 @@ namespace BattleSim.Core.Tests.Simulation
             sim.AdvanceTick(); // tick → 2, pilotCooldown = 100 → 99
 
             int cd1 = GetSlotState(sim.GetState(), BattleSide.SideA, 0).PilotCooldownTick;
-            if (cd1 != 99)
-                throw new InvalidOperationException("Pilot cooldown should be 99. Got: " + cd1);
+            if (cd1 != 79)
+                throw new InvalidOperationException("Pilot cooldown should be 79. Got: " + cd1);
 
-            sim.AdvanceTick(); // tick → 3, pilotCooldown → 98
+            sim.AdvanceTick(); // tick → 3, pilotCooldown → 78
             int cd2 = GetSlotState(sim.GetState(), BattleSide.SideA, 0).PilotCooldownTick;
-            if (cd2 != 98)
-                throw new InvalidOperationException("Pilot cooldown should be 98. Got: " + cd2);
+            if (cd2 != 78)
+                throw new InvalidOperationException("Pilot cooldown should be 78. Got: " + cd2);
         }
 
         private static void SpawnDroneSquad_ConsumesEnergyAndStartsCooldown()
@@ -544,8 +544,8 @@ namespace BattleSim.Core.Tests.Simulation
             SlotState slot = GetSlotState(sim.GetState(), BattleSide.SideA, 0);
             if (slot.IsPilotDeployed)
                 throw new InvalidOperationException("Pilot should not be deployed after recall.");
-            if (slot.PilotCooldownTick != 99)
-                throw new InvalidOperationException("Pilot cooldown should be 99. Got: " + slot.PilotCooldownTick);
+            if (slot.PilotCooldownTick != 79)
+                throw new InvalidOperationException("Pilot cooldown should be 79. Got: " + slot.PilotCooldownTick);
         }
 
         private static void RecallPilot_RejectsWhenNotDeployed()
@@ -2636,7 +2636,7 @@ namespace BattleSim.Core.Tests.Simulation
             for (int l = 1; l <= 5; l++)
             {
                 sim.SubmitCommand(BattleCommand.StartSupportUpgrade(sim.CurrentTick, BattleSide.SideA, BattleSupportTrack.Resource));
-                int duration = 400 + 100 * l;
+                int duration = 320 + 80 * l;
                 for (int t = 0; t < duration; t++)
                 {
                     sim.AdvanceTick();
@@ -2686,7 +2686,7 @@ namespace BattleSim.Core.Tests.Simulation
 
             sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Resource));
 
-            for (int i = 0; i < 500; i++)
+            for (int i = 0; i < 400; i++)
             {
                 sim.AdvanceTick();
             }
@@ -2704,7 +2704,7 @@ namespace BattleSim.Core.Tests.Simulation
             BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
 
             sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Resource));
-            for (int i = 0; i < 500; i++) sim.AdvanceTick();
+            for (int i = 0; i < 400; i++) sim.AdvanceTick();
 
             if (GetSideState(sim.GetState(), BattleSide.SideA).Energy != Fp.Zero)
                 throw new InvalidOperationException("Energy must be zero at completion tick.");
@@ -2721,7 +2721,7 @@ namespace BattleSim.Core.Tests.Simulation
             BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
 
             sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Resource));
-            for (int i = 0; i < 500; i++) sim.AdvanceTick();
+            for (int i = 0; i < 400; i++) sim.AdvanceTick();
 
             sim.AdvanceTick();
             Fp energy = GetSideState(sim.GetState(), BattleSide.SideA).Energy;
@@ -2735,15 +2735,15 @@ namespace BattleSim.Core.Tests.Simulation
             BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
 
             sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Resource));
-            for (int i = 0; i < 500; i++) sim.AdvanceTick();
+            for (int i = 0; i < 400; i++) sim.AdvanceTick();
 
-            Fp energy500 = GetSideState(sim.GetState(), BattleSide.SideA).Energy;
-            if (energy500 != Fp.Zero)
+            Fp energy400 = GetSideState(sim.GetState(), BattleSide.SideA).Energy;
+            if (energy400 != Fp.Zero)
                 throw new InvalidOperationException("Regen must NOT apply on completion tick.");
 
             sim.AdvanceTick();
-            Fp energy501 = GetSideState(sim.GetState(), BattleSide.SideA).Energy;
-            if (energy501 != Fp.FromInt(11))
+            Fp energy401 = GetSideState(sim.GetState(), BattleSide.SideA).Energy;
+            if (energy401 != Fp.FromInt(11))
                 throw new InvalidOperationException("Regen should resume on the next tick.");
         }
 
@@ -2781,20 +2781,20 @@ namespace BattleSim.Core.Tests.Simulation
             sim.SubmitCommand(BattleCommand.SpawnDroneSquad(1, 0, "lane_ground", BattleSide.SideA));
             sim.AdvanceTick();
 
-            // Advance until Level 1 completes (duration = 500)
-            for (int i = 0; i < 498; i++) sim.AdvanceTick();
+            // Advance until Level 1 completes (duration = 400)
+            for (int i = 0; i < 398; i++) sim.AdvanceTick();
 
             // Level 1 complete. Deploy Pilot.
-            sim.SubmitCommand(BattleCommand.DeployPilot(500, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.DeployPilot(400, 0, "lane_ground", BattleSide.SideA));
             sim.AdvanceTick();
 
             // 3. Start Level 2 Pilot upgrade (cost = 60). Remaining energy = 140.
-            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(501, BattleSide.SideA, BattleSupportTrack.Pilot));
+            sim.SubmitCommand(BattleCommand.StartSupportUpgrade(401, BattleSide.SideA, BattleSupportTrack.Pilot));
             sim.AdvanceTick();
 
             // 4. Recall Pilot during active upgrade - should be allowed!
 #pragma warning disable CS8625
-            sim.SubmitCommand(BattleCommand.RecallPilot(502, 0, null, BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.RecallPilot(402, 0, null, BattleSide.SideA));
 #pragma warning restore CS8625
             sim.AdvanceTick();
         }
@@ -2807,9 +2807,9 @@ namespace BattleSim.Core.Tests.Simulation
             BattleSimulator sim = new BattleSimulator(cfg, initial);
 
             sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Pilot));
-            for (int i = 0; i < 500; i++) sim.AdvanceTick();
+            for (int i = 0; i < 400; i++) sim.AdvanceTick();
 
-            sim.SubmitCommand(BattleCommand.DeployPilot(500, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.DeployPilot(400, 0, "lane_ground", BattleSide.SideA));
             sim.AdvanceTick();
 
             BattleEntity? pilot = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideA);
@@ -2828,7 +2828,7 @@ namespace BattleSim.Core.Tests.Simulation
             sim.AdvanceTick();
 
             sim.SubmitCommand(BattleCommand.StartSupportUpgrade(1, BattleSide.SideA, BattleSupportTrack.Pilot));
-            for (int i = 0; i < 500; i++) sim.AdvanceTick();
+            for (int i = 0; i < 400; i++) sim.AdvanceTick();
 
             BattleEntity? pilot = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideA);
             if (pilot == null) throw new InvalidOperationException("Pilot not found.");
@@ -2842,9 +2842,9 @@ namespace BattleSim.Core.Tests.Simulation
             BattleSimulator sim = new BattleSimulator(cfg, MinimalInitialState());
 
             sim.SubmitCommand(BattleCommand.StartSupportUpgrade(0, BattleSide.SideA, BattleSupportTrack.Pilot));
-            for (int i = 0; i < 500; i++) sim.AdvanceTick();
+            for (int i = 0; i < 400; i++) sim.AdvanceTick();
 
-            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(500, 0, "lane_ground", BattleSide.SideA));
+            sim.SubmitCommand(BattleCommand.SpawnDroneSquad(400, 0, "lane_ground", BattleSide.SideA));
             sim.AdvanceTick();
 
             BattleEntity? drone = FindByOwner(sim.GetState(), "lane_ground", BattleSide.SideA);
@@ -2875,7 +2875,7 @@ namespace BattleSim.Core.Tests.Simulation
             }
             if (!foundStarted) throw new InvalidOperationException("SupportUpgradeStarted event not found.");
 
-            for (int i = 0; i < 499; i++) sim.AdvanceTick();
+            for (int i = 0; i < 399; i++) sim.AdvanceTick();
 
             BattleState state2 = sim.GetState();
             bool foundCompleted = false;
@@ -2906,7 +2906,7 @@ namespace BattleSim.Core.Tests.Simulation
             if (ss.SupportState.ResourceLevel != 0) throw new InvalidOperationException("ResourceLevel mismatch during active.");
             if (ss.SupportState.ActiveTrack != BattleSupportTrack.Resource) throw new InvalidOperationException("ActiveTrack mismatch.");
             if (ss.SupportState.ActiveTargetLevel != 1) throw new InvalidOperationException("ActiveTargetLevel mismatch.");
-            if (ss.SupportState.RemainingTick != 499) throw new InvalidOperationException("RemainingTick mismatch. Got: " + ss.SupportState.RemainingTick);
+            if (ss.SupportState.RemainingTick != 399) throw new InvalidOperationException("RemainingTick mismatch. Got: " + ss.SupportState.RemainingTick);
             if (!ss.SupportState.IsActive) throw new InvalidOperationException("IsActive mismatch.");
             if (!ss.SupportState.IsEnergyRegenPaused) throw new InvalidOperationException("IsEnergyRegenPaused mismatch.");
             if (ss.SupportState.IsPilotDeployBlocked) throw new InvalidOperationException("IsPilotDeployBlocked mismatch.");

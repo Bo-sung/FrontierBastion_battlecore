@@ -404,18 +404,17 @@ namespace BattleSim.Core.Simulation
 
             int targetLevel = currentLevel + 1;
             int cost = 0;
-            int duration = 0;
 
             if (cmd.SupportTrack == BattleSupportTrack.Resource)
             {
                 cost = 100 + 10 * (targetLevel - 1);
-                duration = 400 + 100 * targetLevel;
             }
             else if (cmd.SupportTrack == BattleSupportTrack.Pilot)
             {
                 cost = 50 + 10 * (targetLevel - 1);
-                duration = 400 + 100 * targetLevel;
             }
+
+            int duration = GetSupportUpgradeDurationTick(targetLevel);
 
             Fp fpCost = Fp.FromInt(cost);
             if (sideState.Energy < fpCost)
@@ -468,6 +467,11 @@ namespace BattleSim.Core.Simulation
                 supportTrack: completedTrack,
                 supportLevel: completedLevel
             );
+        }
+
+        private int GetSupportUpgradeDurationTick(int targetLevel)
+        {
+            return 320 + 80 * targetLevel;
         }
 
         private void UpdateSupportUpgrades()

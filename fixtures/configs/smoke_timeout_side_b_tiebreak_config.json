@@ -13,9 +13,9 @@
     "energy_regen_per_tick": "0.0000"
   },
   "pilot_timings": {
-    "deploy_cooldown_tick": 200,
-    "return_cooldown_tick": 100,
-    "knockout_drone_resume_tick": 50
+    "deploy_cooldown_tick": 160,
+    "return_cooldown_tick": 80,
+    "knockout_drone_resume_tick": 40
   },
   "max_battle_tick": 3,
   "timeout_tie_winner_side": "side_b",

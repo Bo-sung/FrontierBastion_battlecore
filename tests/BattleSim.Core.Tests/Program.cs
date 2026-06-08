@@ -15,8 +15,8 @@ if (args.Length >= 1 && args[0] == "--print-rng-golden")
     return;
 }
 
-AssertEqual(20, BattleCoreDefaults.TickRate, nameof(BattleCoreDefaults.TickRate));
-AssertEqual(50, BattleCoreDefaults.TickMilliseconds, nameof(BattleCoreDefaults.TickMilliseconds));
+AssertEqual(16, BattleCoreDefaults.TickRate, nameof(BattleCoreDefaults.TickRate));
+AssertEqual(62.5m, BattleCoreDefaults.TickMilliseconds, nameof(BattleCoreDefaults.TickMilliseconds));
 AssertEqual(10000, BattleCoreDefaults.FixedPointScale, nameof(BattleCoreDefaults.FixedPointScale));
 
 FpTests.Run();
